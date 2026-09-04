@@ -69,6 +69,11 @@ def list_visible_packs(user_id: int) -> list[str]:
 def add_coowner(pack_name: str, user_id: int) -> None:
     redis.sadd(f"coowners:{pack_name}", str(user_id))
     redis.sadd(f"packs:{user_id}", pack_name)
+    redis.srem(f"hidden:{user_id}", pack_name)
+
+
+def remove_coowner(pack_name: str, user_id: int) -> None:
+    redis.srem(f"coowners:{pack_name}", str(user_id))
 
 
 def list_coowners(pack_name: str) -> list[int]:
@@ -80,6 +85,22 @@ def is_owner_or_coowner(user_id: int, pack_name: str) -> bool:
     if pack_name in list_user_packs(user_id):
         return True
     return redis.sismember(f"coowners:{pack_name}", str(user_id)) == 1
+
+
+def is_original_owner(user_id: int, pack_name: str) -> bool:
+    return pack_name in list_user_packs(user_id)
+
+
+def get_pack_owner(pack_name: str) -> int | None:
+    prefix = f"packs:"
+    for key in redis.scan_iter(f"{prefix}*"):
+        members = redis.smembers(key)
+        if pack_name in members:
+            try:
+                return int(key.split(":")[-1])
+            except (ValueError, IndexError):
+                pass
+    return None
 
 
 # ---------- awaiting actions for button flows ----------

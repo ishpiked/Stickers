@@ -65,7 +65,8 @@ async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Use: /newpack [name]")
         return
-    pack_name = f"{'_'.join(context.args)}_by_{BOT_USERNAME}"
+    clean = "_".join(context.args).strip().lower()
+    pack_name = f"{clean}_by_{BOT_USERNAME.lower()}"
     user_id = update.effective_user.id
     state.set_active_pack(user_id, pack_name)
     state.add_user_pack(user_id, pack_name)
@@ -79,12 +80,14 @@ async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def mypacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _blocked(update, context):
         return
-    packs = state.list_user_packs(update.effective_user.id)
-    if not packs:
+    user_id = update.effective_user.id
+    packs = state.list_user_packs(user_id)
+    visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+    if not visible:
         await update.message.reply_text("No packs yet. Use /newpack [name] to start.")
         return
     lines = []
-    for p in packs:
+    for p in visible:
         try:
             s = await context.bot.get_sticker_set(p)
             display = p.split("_by_")[0].replace("_", " ")
@@ -102,7 +105,11 @@ async def usepack(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Use: /usepack [name]")
         return
     pack_name = context.args[0]
-    state.set_active_pack(update.effective_user.id, pack_name)
+    user_id = update.effective_user.id
+    if pack_name not in state.list_user_packs(user_id) and not state.is_owner_or_coowner(user_id, pack_name):
+        await update.message.reply_text("This pack is not in your list.")
+        return
+    state.set_active_pack(user_id, pack_name)
     display = pack_name.split("_by_")[0].replace("_", " ")
     await update.message.reply_text(f"Active pack set to {display}.")
 
@@ -115,7 +122,7 @@ async def renamepack(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     pack_name, new_title = context.args[0], " ".join(context.args[1:])
     user_id = update.effective_user.id
-    if pack_name not in state.list_user_packs(user_id) and user_id not in ADMIN_IDS:
+    if pack_name not in state.list_user_packs(user_id) and not state.is_owner_or_coowner(user_id, pack_name):
         await update.message.reply_text("This pack is not yours.")
         return
     try:
@@ -157,6 +164,7 @@ def _get_help_text(user_id: int) -> str:
         " /mypacks : list your packs\n"
         " /renamepack [name] [new title] : rename a pack you own\n"
         " /removesticker : reply to a sticker to remove it\n"
+        " /cancel : cancel current action\n"
         " /help : view this message\n\n"
         "Send any photo, GIF or video and it will be prepared as a sticker for your active pack.\n"
     )
@@ -224,7 +232,8 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if action == "mypacks":
         packs = state.list_user_packs(user_id)
-        if not packs:
+        visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+        if not visible:
             text = "You have no packs yet. Tap Create to make a new pack."
             try:
                 if query.message.photo:
@@ -237,11 +246,11 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "Your packs. Tap a pack to manage it."
         try:
             if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=packs_keyboard(packs))
+                await query.edit_message_caption(caption=text, reply_markup=packs_keyboard(visible))
             else:
-                await query.edit_message_text(text=text, reply_markup=packs_keyboard(packs))
+                await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
         except BadRequest:
-            await query.edit_message_text(text=text, reply_markup=packs_keyboard(packs))
+            await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
     elif action == "create":
         state.set_awaiting(user_id, "create_pack")
         text = "Send pack name for new pack. Use only letters and numbers."
@@ -353,8 +362,10 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
             title = pack_name.split("_by_")[0].replace("_", " ")
         coowners = state.list_coowners(pack_name)
         co_text = ", ".join(str(x) for x in coowners) if coowners else "none"
+        owner_id = state.get_pack_owner(pack_name)
+        owner_text = str(owner_id) if owner_id else "unknown"
         is_hidden = state.is_pack_hidden(user_id, pack_name)
-        text = f"Pack stats.\nTitle: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nCoowners: {co_text}"
+        text = f"Pack stats.\nTitle: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nOwner: {owner_text}\nCoowners: {co_text}"
         try:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
@@ -363,6 +374,9 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except BadRequest:
             await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
     elif action == "transfer":
+        if not state.is_original_owner(user_id, pack_name):
+            await query.answer("Only the pack owner can transfer.", show_alert=True)
+            return
         state.set_awaiting(user_id, "transfer_pack", {"pack": pack_name})
         text = "Send user id to give access to this pack."
         try:
@@ -481,8 +495,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file = await update.message.photo[-1].get_file()
             local_path = media.tmp_path(".jpg")
             await file.download_to_drive(local_path)
-            with open(local_path, "rb") as f:
-                await context.bot.set_sticker_set_thumbnail(name=pack_name, user_id=user_id, format="static", thumbnail=f)
+            try:
+                with open(local_path, "rb") as f:
+                    await context.bot.set_sticker_set_thumbnail(name=pack_name, user_id=user_id, format="static", thumbnail=f)
+            except BadRequest as e:
+                if "format" in str(e).lower():
+                    with open(local_path, "rb") as f:
+                        await context.bot.set_sticker_set_thumbnail(name=pack_name, user_id=user_id, format="video", thumbnail=f)
+                else:
+                    raise
             os.remove(local_path)
             state.clear_awaiting(user_id)
             await update.message.reply_text("Frame updated.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
@@ -547,6 +568,9 @@ async def handle_crop_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not job:
         await query.edit_message_text("Request expired. Please send media again.")
         return
+    if job.get("pack") and not state.is_owner_or_coowner(query.from_user.id, job["pack"]):
+        await query.answer("Not your pack.", show_alert=True)
+        return
     box = media.crop_box(job["width"], job["height"], choice)
     job["crop"] = list(box)
     state.save_job(job_id, job)
@@ -595,6 +619,9 @@ async def handle_preview_choice(update: Update, context: ContextTypes.DEFAULT_TY
     if not job:
         await query.edit_message_reply_markup(reply_markup=None)
         return
+    if job.get("pack") and not state.is_owner_or_coowner(query.from_user.id, job["pack"]):
+        await query.answer("Not your pack.", show_alert=True)
+        return
 
     if action == "cancel":
         _cleanup_out_path(job)
@@ -629,6 +656,9 @@ async def handle_emoji_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
     job = state.get_job(job_id)
     if not job or "out_path" not in job:
         await query.edit_message_text("Request expired. Please send media again.")
+        return
+    if job.get("pack") and not state.is_owner_or_coowner(query.from_user.id, job["pack"]):
+        await query.answer("Not your pack.", show_alert=True)
         return
 
     emoji = "🙂" if emoji == "default" else emoji

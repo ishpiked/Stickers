@@ -9,7 +9,8 @@ async def is_subscribed(bot, user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
         return member.status in ("member", "administrator", "creator")
-    except TelegramError:
-        # bot isn't in the channel / channel is wrong -- fail open rather than
-        # locking everyone out over a misconfigured setting
+    except TelegramError as e:
+        err = str(e).lower()
+        if "chat not found" in err or "user not found" in err or "not enough rights" in err:
+            return True
         return True
