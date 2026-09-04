@@ -143,6 +143,40 @@ async def removesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"couldn't remove: {e}")
 
 
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    is_admin = user_id in ADMIN_IDS
+    text = (
+        "Xtickerz Help.\n\n"
+        "Xtickerz converts photos, GIFs and videos into Telegram stickers.\n\n"
+        "Commands:\n"
+        " /start : view welcome message\n"
+        " /newpack [name] : create a new pack\n"
+        " /usepack [name] : switch to your pack\n"
+        " /mypacks : list your packs\n"
+        " /renamepack [name] [new title] : rename a pack you own\n"
+        " /removesticker : reply to a sticker to remove it\n"
+        " /help : view this message\n\n"
+        "Send any photo, GIF or video and it will be prepared as a sticker for your active pack.\n"
+    )
+    if is_admin:
+        text += (
+            "\nAdmin:\n"
+            " /ban [id] : ban a user\n"
+            " /unban [id] : unban a user\n"
+            " /stats : view sticker count\n"
+            " /health : check service status\n"
+            " /broadcast [text] : send message to all chats\n"
+            " /settings : view settings\n"
+            " /setstarttext [text] : update welcome text\n"
+            " /setstartimage : reply to a photo to update welcome image, use [none] to clear\n"
+            " /setforcesub [channel or off] : set force join channel\n"
+            " /setratelimit [n] : set hourly limit\n"
+            " /resetsettings : reset to defaults\n"
+        )
+    await update.message.reply_text(text)
+
+
 # ---------- media intake ----------
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -473,6 +507,7 @@ async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
 
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("newpack", newpack))
     app.add_handler(CommandHandler("mypacks", mypacks))
     app.add_handler(CommandHandler("usepack", usepack))
