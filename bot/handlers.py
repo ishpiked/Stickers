@@ -16,11 +16,9 @@ from bot.logger import log
 from bot.subscription import is_subscribed
 
 
-# ---------- gates shared by user-facing handlers ----------
+# ---------- gates shared by user facing handlers ----------
 
 async def _blocked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Runs the ban / force-sub / rate-limit checks. Returns True if the
-    update should stop here (a response has already been sent)."""
     user_id = update.effective_user.id
 
     if state.is_banned(user_id):
@@ -28,8 +26,9 @@ async def _blocked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
     if not await is_subscribed(context.bot, user_id):
         channel = state.get_settings()["force_sub_channel"]
+        clean = channel.lstrip("@")
         await update.effective_message.reply_text(
-            f"join {channel} first, then tap below ◝(ᵔᗜᵔ)◜",
+            f"Join {clean} to continue. Tap below to verify.",
             reply_markup=subscribe_keyboard(channel),
         )
         return True
@@ -41,10 +40,10 @@ async def checksub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     if await is_subscribed(context.bot, user_id):
-        await query.answer("verified ✅")
-        await query.edit_message_text("you're in — send me a photo, gif, or video")
+        await query.answer("Verified")
+        await query.edit_message_text("Verified. Send a photo, GIF or video to continue.")
     else:
-        await query.answer("still not seeing you in there, try again", show_alert=True)
+        await query.answer("Not verified yet. Please try again.", show_alert=True)
 
 
 # ---------- user commands ----------
@@ -64,17 +63,17 @@ async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _blocked(update, context):
         return
     if not context.args:
-        await update.message.reply_text("usage: /newpack my_cool_pack")
+        await update.message.reply_text("Use: /newpack [name]")
         return
     pack_name = f"{'_'.join(context.args)}_by_{BOT_USERNAME}"
     user_id = update.effective_user.id
     state.set_active_pack(user_id, pack_name)
     state.add_user_pack(user_id, pack_name)
+    display = pack_name.split("_by_")[0].replace("_", " ")
     await update.message.reply_text(
-        f"pack set to `{pack_name}`\nnow send me a photo, gif, or video",
-        parse_mode="Markdown",
+        f"Pack set to {display}. Now send a photo, GIF or video."
     )
-    await log(context.bot, f"📦 new pack <code>{pack_name}</code> by user {user_id}")
+    await log(context.bot, f"New pack {pack_name} by user {user_id}")
 
 
 async def mypacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,45 +81,48 @@ async def mypacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     packs = state.list_user_packs(update.effective_user.id)
     if not packs:
-        await update.message.reply_text("no packs yet — /newpack <name> to start one")
+        await update.message.reply_text("No packs yet. Use /newpack [name] to start.")
         return
     lines = []
     for p in packs:
         try:
             s = await context.bot.get_sticker_set(p)
-            lines.append(f"- {p} ({len(s.stickers)}/120)")
+            display = p.split("_by_")[0].replace("_", " ")
+            lines.append(f"{display} : {len(s.stickers)}/120")
         except BadRequest:
-            lines.append(f"- {p} (gone?)")
-    await update.message.reply_text("your packs:\n" + "\n".join(lines) + "\n\n/usepack <name> to switch")
+            display = p.split("_by_")[0].replace("_", " ")
+            lines.append(f"{display} : gone")
+    await update.message.reply_text("Your packs:\n" + "\n".join(lines) + "\n\nUse /usepack [name] to switch.")
 
 
 async def usepack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _blocked(update, context):
         return
     if not context.args:
-        await update.message.reply_text("usage: /usepack <exact_pack_name>")
+        await update.message.reply_text("Use: /usepack [name]")
         return
     pack_name = context.args[0]
     state.set_active_pack(update.effective_user.id, pack_name)
-    await update.message.reply_text(f"active pack set to `{pack_name}`", parse_mode="Markdown")
+    display = pack_name.split("_by_")[0].replace("_", " ")
+    await update.message.reply_text(f"Active pack set to {display}.")
 
 
 async def renamepack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _blocked(update, context):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("usage: /renamepack <pack_name> <new title>")
+        await update.message.reply_text("Use: /renamepack [name] [new title]")
         return
     pack_name, new_title = context.args[0], " ".join(context.args[1:])
     user_id = update.effective_user.id
     if pack_name not in state.list_user_packs(user_id) and user_id not in ADMIN_IDS:
-        await update.message.reply_text("that's not your pack")
+        await update.message.reply_text("This pack is not yours.")
         return
     try:
         await context.bot.set_sticker_set_title(name=pack_name, title=new_title)
-        await update.message.reply_text("renamed ✓")
+        await update.message.reply_text("Renamed.")
     except BadRequest as e:
-        await update.message.reply_text(f"couldn't rename: {e}")
+        await update.message.reply_text(f"Could not rename: {e}")
 
 
 async def removesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -128,19 +130,19 @@ async def removesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     replied = update.message.reply_to_message
     if not replied or not replied.sticker:
-        await update.message.reply_text("reply to a sticker with /removesticker")
+        await update.message.reply_text("Reply to a sticker with /removesticker")
         return
     set_name = replied.sticker.set_name
     user_id = update.effective_user.id
     if set_name not in state.list_user_packs(user_id) and user_id not in ADMIN_IDS:
-        await update.message.reply_text("that's not your pack")
+        await update.message.reply_text("This pack is not yours.")
         return
     try:
         await context.bot.delete_sticker_from_set(sticker=replied.sticker.file_id)
-        await update.message.reply_text("removed ✓")
-        await log(context.bot, f"🗑️ sticker removed from <code>{set_name}</code> by user {user_id}")
+        await update.message.reply_text("Removed.")
+        await log(context.bot, f"Sticker removed from {set_name} by user {user_id}")
     except BadRequest as e:
-        await update.message.reply_text(f"couldn't remove: {e}")
+        await update.message.reply_text(f"Could not remove: {e}")
 
 
 def _get_help_text(user_id: int) -> str:
@@ -216,8 +218,6 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     if action == "mypacks":
         packs = state.list_user_packs(user_id)
-        visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
-        # show all packs, but indicate hidden via detail view
         if not packs:
             text = "You have no packs yet. Tap Create to make a new pack."
             try:
@@ -251,6 +251,8 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = len(packs)
         created = state.get_stat("stickers_created")
         active = state.get_active_pack(user_id) or "none"
+        if active != "none":
+            active = active.split("_by_")[0].replace("_", " ")
         text = f"Stats.\nPacks: {total}\nStickers created: {created}\nActive pack: {active}"
         try:
             if query.message.photo:
@@ -277,7 +279,7 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         count = 0
         title = pack_name.split("_by_")[0].replace("_", " ")
-    text = f"Pack: {title}\nName: {pack_name}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}"
+    text = f"Pack: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}"
     try:
         if query.message.photo:
             await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
@@ -291,7 +293,6 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     parts = query.data.split(":", 2)
-    # pack:action:pack_name
     _, action, pack_name = parts
     user_id = query.from_user.id
     if not state.is_owner_or_coowner(user_id, pack_name):
@@ -300,7 +301,8 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if action == "add":
         state.set_active_pack(user_id, pack_name)
         state.add_user_pack(user_id, pack_name)
-        text = f"Active pack set to {pack_name}. Send a photo, GIF or video to add stickers."
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        text = f"Active pack set to {display}. Send a photo, GIF or video to add stickers."
         try:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
@@ -339,7 +341,7 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         coowners = state.list_coowners(pack_name)
         co_text = ", ".join(str(x) for x in coowners) if coowners else "none"
         is_hidden = state.is_pack_hidden(user_id, pack_name)
-        text = f"Pack stats.\nTitle: {title}\nName: {pack_name}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nCoowners: {co_text}"
+        text = f"Pack stats.\nTitle: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nCoowners: {co_text}"
         try:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
@@ -392,7 +394,8 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
         state.set_active_pack(user_id, pack_name)
         state.add_user_pack(user_id, pack_name)
         state.clear_awaiting(user_id)
-        await update.message.reply_text(f"Pack created: {pack_name}. It is now active. Send media to add stickers.", reply_markup=pack_detail_keyboard(pack_name, False))
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        await update.message.reply_text(f"Pack created: {display}. It is now active. Send media to add stickers.", reply_markup=pack_detail_keyboard(pack_name, False))
         await log(context.bot, f"Pack created {pack_name} by user {user_id}")
         return True
     elif action == "rename_pack":
@@ -416,7 +419,8 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
             return True
         state.add_coowner(pack_name, new_id)
         state.clear_awaiting(user_id)
-        await update.message.reply_text(f"Access given to {new_id} for pack {pack_name}.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        await update.message.reply_text(f"Access given to {new_id} for pack {display}.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
         await log(context.bot, f"Pack {pack_name} shared to {new_id} by {user_id}")
         return True
     return False
@@ -457,12 +461,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not state.check_rate_limit(user_id):
-        await update.message.reply_text("slow down — hourly sticker limit hit, try again later")
+        await update.message.reply_text("Hourly limit reached. Please try again later.")
         return
 
     active_pack = state.get_active_pack(user_id)
     if not active_pack:
-        await update.message.reply_text("set a pack first — /newpack <name> or /usepack <name>")
+        await update.message.reply_text("Set a pack first. Use /newpack [name] or /usepack [name]")
         return
 
     msg = update.message
@@ -476,14 +480,14 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_file = msg.document
         kind = "video" if "video" in msg.document.mime_type else "photo"
     else:
-        await update.message.reply_text("send a photo, gif, or video pls (˶˃⤙˂˶)")
+        await update.message.reply_text("Send a photo, GIF or video.")
         return
 
     file = await tg_file.get_file()
     local_path = media.tmp_path(os.path.splitext(file.file_path)[1] or ".bin")
     await file.download_to_drive(local_path)
     width, height, _ = media.probe_dimensions(local_path)
-    os.remove(local_path)  # re-fetched fresh at whichever stage actually needs the bytes
+    os.remove(local_path)
 
     job_id = uuid.uuid4().hex
     job = {
@@ -498,7 +502,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     options = media.crop_options_for(width, height)
     await update.message.reply_text(
-        "not square — which part should become the sticker?",
+        "Image is not square. Choose area to use.",
         reply_markup=crop_choice_keyboard(job_id, options),
     )
 
@@ -509,12 +513,12 @@ async def handle_crop_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     _, job_id, choice = query.data.split(":")
     job = state.get_job(job_id)
     if not job:
-        await query.edit_message_text("that request expired, send the media again")
+        await query.edit_message_text("Request expired. Please send media again.")
         return
     box = media.crop_box(job["width"], job["height"], choice)
     job["crop"] = list(box)
     state.save_job(job_id, job)
-    await query.edit_message_text("cropping, one sec ₍^. .^₎⟆")
+    await query.edit_message_text("Cropping. Please wait.")
     await build_preview(query.message.chat_id, context, job_id, job, crop=box)
 
 
@@ -537,7 +541,7 @@ async def build_preview(chat_id, context, job_id, job, crop):
     if os.path.getsize(out_path) > max_bytes:
         os.remove(out_path)
         state.clear_job(job_id)
-        await context.bot.send_message(chat_id, "too large even after conversion — try a shorter/simpler clip")
+        await context.bot.send_message(chat_id, "File is too large. Try a shorter clip.")
         return
 
     job["out_path"] = out_path
@@ -574,7 +578,7 @@ async def handle_preview_choice(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_reply_markup(reply_markup=None)
         await context.bot.send_message(
             query.message.chat_id,
-            "pick again — which part?",
+            "Choose area again.",
             reply_markup=crop_choice_keyboard(job_id, options),
         )
         return
@@ -582,7 +586,7 @@ async def handle_preview_choice(update: Update, context: ContextTypes.DEFAULT_TY
     if action == "add":
         await query.edit_message_reply_markup(reply_markup=None)
         await context.bot.send_message(
-            query.message.chat_id, "pick an emoji tag:", reply_markup=emoji_keyboard(job_id)
+            query.message.chat_id, "Choose an emoji for this sticker.", reply_markup=emoji_keyboard(job_id)
         )
 
 
@@ -592,7 +596,7 @@ async def handle_emoji_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
     _, job_id, emoji = query.data.split(":")
     job = state.get_job(job_id)
     if not job or "out_path" not in job:
-        await query.edit_message_text("that request expired, send the media again")
+        await query.edit_message_text("Request expired. Please send media again.")
         return
 
     emoji = "🙂" if emoji == "default" else emoji
@@ -618,11 +622,11 @@ async def handle_emoji_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         state.add_user_pack(user_id, pack_name)
         state.bump_stat("stickers_created")
-        await query.edit_message_text(f"added ✓ — t.me/addstickers/{pack_name}")
-        await log(context.bot, f"✅ sticker added to <code>{pack_name}</code> by user {user_id}")
+        await query.edit_message_text("Sticker added.")
+        await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
     except Exception as e:
-        await context.bot.send_message(chat_id, "something broke making that sticker, try again")
-        await log(context.bot, f"🔥 sticker failed for user {user_id}: <code>{e}</code>")
+        await context.bot.send_message(chat_id, "Could not create sticker. Please try again.")
+        await log(context.bot, f"Sticker failed for user {user_id}: {e}")
         raise
     finally:
         _cleanup_out_path(job)
@@ -653,8 +657,8 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return
     state.ban_user(int(context.args[0]))
-    await update.message.reply_text("banned")
-    await log(context.bot, f"🚫 user {context.args[0]} banned by admin {update.effective_user.id}")
+    await update.message.reply_text("Banned.")
+    await log(context.bot, f"User {context.args[0]} banned by admin {update.effective_user.id}")
 
 
 @admin_only
@@ -662,18 +666,18 @@ async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return
     state.unban_user(int(context.args[0]))
-    await update.message.reply_text("unbanned")
+    await update.message.reply_text("Unbanned.")
 
 
 @admin_only
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"stickers created: {state.get_stat('stickers_created')}")
+    await update.message.reply_text(f"Stickers created: {state.get_stat('stickers_created')}")
 
 
 @admin_only
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("usage: /broadcast <text>")
+        await update.message.reply_text("Use: /broadcast [text]")
         return
     text = " ".join(context.args)
     chats = state.list_chats()
@@ -684,7 +688,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except (Forbidden, BadRequest):
             failed += 1
-    await update.message.reply_text(f"sent to {sent}, failed/blocked {failed}")
+    await update.message.reply_text(f"Sent to {sent}. Failed: {failed}")
 
 
 @admin_only
@@ -698,11 +702,11 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         redis_ok = False
     free_gb = shutil.disk_usage("/tmp").free / (1024 ** 3)
     await update.message.reply_text(
-        f"ffmpeg: {'ok' if ffmpeg_ok else 'MISSING'}\n"
-        f"redis: {'ok' if redis_ok else 'FAILING'}\n"
-        f"/tmp free: {free_gb:.1f} GB\n"
-        f"known chats: {len(state.list_chats())}\n"
-        f"stickers created: {state.get_stat('stickers_created')}"
+        f"ffmpeg: {'ok' if ffmpeg_ok else 'missing'}\n"
+        f"redis: {'ok' if redis_ok else 'failing'}\n"
+        f"free: {free_gb:.1f} GB\n"
+        f"chats: {len(state.list_chats())}\n"
+        f"stickers: {state.get_stat('stickers_created')}"
     )
 
 
@@ -710,70 +714,71 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = state.get_settings()
     await update.message.reply_text(
-        "current settings:\n"
-        f"- start_text: {s['start_text'][:80]}{'...' if len(s['start_text']) > 80 else ''}\n"
-        f"- start_image: {'set' if s['start_image'] else 'none'}\n"
-        f"- force_sub_channel: {s['force_sub_channel'] or 'disabled'}\n"
-        f"- rate_limit_per_hour: {s['rate_limit_per_hour']}\n\n"
-        "/setstarttext <text>\n"
-        "/setstartimage (reply to a photo, or 'none' to clear)\n"
-        "/setforcesub <@channel|off>\n"
-        "/setratelimit <n>\n"
-        "/resetsettings"
+        "Current settings:\n"
+        f"start text: {s['start_text'][:60]}\n"
+        f"start image: {'set' if s['start_image'] else 'none'}\n"
+        f"force channel: {s['force_sub_channel'] or 'none'}\n"
+        f"limit: {s['rate_limit_per_hour']}\n\n"
+        "Use:\n"
+        " /setstarttext [text]\n"
+        " /setstartimage [reply to photo or none]\n"
+        " /setforcesub [channel or off]\n"
+        " /setratelimit [n]\n"
+        " /resetsettings"
     )
 
 
 @admin_only
 async def setstarttext(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("usage: /setstarttext <text>")
+        await update.message.reply_text("Use: /setstarttext [text]")
         return
     state.set_setting("start_text", update.message.text.split(" ", 1)[1])
-    await update.message.reply_text("start text updated ✓")
+    await update.message.reply_text("Start text updated.")
 
 
 @admin_only
 async def setstartimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0].lower() == "none":
         state.set_setting("start_image", "")
-        await update.message.reply_text("start image cleared ✓")
+        await update.message.reply_text("Start image cleared.")
         return
     replied = update.message.reply_to_message
     if not replied or not replied.photo:
-        await update.message.reply_text("reply to a photo with /setstartimage, or send /setstartimage none")
+        await update.message.reply_text("Reply to a photo with /setstartimage or use /setstartimage [none]")
         return
     state.set_setting("start_image", replied.photo[-1].file_id)
-    await update.message.reply_text("start image updated ✓")
+    await update.message.reply_text("Start image updated.")
 
 
 @admin_only
 async def setforcesub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("usage: /setforcesub <@channel|off>")
+        await update.message.reply_text("Use: /setforcesub [channel or off]")
         return
     value = "" if context.args[0].lower() == "off" else context.args[0]
     state.set_setting("force_sub_channel", value)
-    await update.message.reply_text(f"force-sub {'disabled' if not value else 'set to ' + value} ✓")
+    await update.message.reply_text(f"Force join {'off' if not value else value}. Updated.")
 
 
 @admin_only
 async def setratelimit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("usage: /setratelimit <n>")
+        await update.message.reply_text("Use: /setratelimit [n]")
         return
     state.set_setting("rate_limit_per_hour", context.args[0])
-    await update.message.reply_text(f"rate limit set to {context.args[0]}/hour ✓")
+    await update.message.reply_text(f"Limit set to {context.args[0]} per hour.")
 
 
 @admin_only
 async def resetsettings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.reset_settings()
-    await update.message.reply_text("settings reset to defaults ✓")
+    await update.message.reply_text("Settings reset to defaults.")
 
 
 async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
     tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))[-1500:]
-    await log(context.bot, f"🔥 unhandled error:\n<code>{tb}</code>")
+    await log(context.bot, f"Error:\n{tb}")
 
 
 def register_handlers(app: Application):
