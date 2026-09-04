@@ -188,6 +188,9 @@ async def handle_help_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     _, action = query.data.split(":")
     user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
     if action == "open":
         text = _get_help_text(user_id)
         try:
@@ -216,6 +219,9 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     _, action = query.data.split(":")
     user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
     if action == "mypacks":
         packs = state.list_user_packs(user_id)
         if not packs:
@@ -268,6 +274,9 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     _, _, pack_name = query.data.split(":", 2)
     user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
     if not state.is_owner_or_coowner(user_id, pack_name):
         await query.answer("Not your pack.", show_alert=True)
         return
@@ -295,10 +304,14 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
     parts = query.data.split(":", 2)
     _, action, pack_name = parts
     user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
     if not state.is_owner_or_coowner(user_id, pack_name):
         await query.answer("Not your pack.", show_alert=True)
         return
     if action == "add":
+        state.clear_awaiting(user_id)
         state.set_active_pack(user_id, pack_name)
         state.add_user_pack(user_id, pack_name)
         display = pack_name.split("_by_")[0].replace("_", " ")
@@ -390,7 +403,17 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
         if not text:
             await update.message.reply_text("Send a valid pack name.")
             return True
-        pack_name = f"{text.replace(' ', '_')}_by_{BOT_USERNAME}"
+        clean = text.strip().lower().replace(" ", "_")
+        if not clean.replace("_", "").isalnum():
+            await update.message.reply_text("Pack name must use only letters and numbers.")
+            return True
+        if len(clean) < 2 or len(clean) > 30:
+            await update.message.reply_text("Pack name must be 2 to 30 characters.")
+            return True
+        pack_name = f"{clean}_by_{BOT_USERNAME.lower()}"
+        if pack_name in state.list_user_packs(user_id):
+            await update.message.reply_text("You already have a pack with this name.")
+            return True
         state.set_active_pack(user_id, pack_name)
         state.add_user_pack(user_id, pack_name)
         state.clear_awaiting(user_id)
@@ -431,6 +454,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state.clear_awaiting(update.effective_user.id)
+    await update.message.reply_text("Cancelled.", reply_markup=start_keyboard())
+
+
 # ---------- media intake ----------
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -442,6 +470,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     awaiting = state.get_awaiting(user_id)
     if awaiting and awaiting.get("action") == "set_frame":
         pack_name = awaiting["data"].get("pack")
+        if not state.is_owner_or_coowner(user_id, pack_name):
+            await update.message.reply_text("This pack is not yours.")
+            state.clear_awaiting(user_id)
+            return
         if not update.message.photo:
             await update.message.reply_text("Send a photo for frame.")
             return
@@ -784,6 +816,7 @@ async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("newpack", newpack))
     app.add_handler(CommandHandler("mypacks", mypacks))
     app.add_handler(CommandHandler("usepack", usepack))
