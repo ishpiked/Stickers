@@ -8,13 +8,26 @@ __pycache__/
 *$py.class
 *.pyo
 *.pyd
+.Python
 .venv/
 venv/
 env/
+ENV/
+pip-log.txt
 *.egg-info/
 dist/
 build/
 
-# os
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
 Thumbs.db
+
+# logs
+*.log
