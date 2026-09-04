@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 from bot.config import BOT_USERNAME, ADMIN_IDS, MAX_STATIC_BYTES, MAX_VIDEO_BYTES
-from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard
+from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard
 from bot import state, media
 from bot.logger import log
 from bot.subscription import is_subscribed
@@ -55,9 +55,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     settings = state.get_settings()
     if settings["start_image"]:
-        await update.message.reply_photo(settings["start_image"], caption=settings["start_text"])
+        await update.message.reply_photo(settings["start_image"], caption=settings["start_text"], reply_markup=start_keyboard())
     else:
-        await update.message.reply_text(settings["start_text"])
+        await update.message.reply_text(settings["start_text"], reply_markup=start_keyboard())
 
 
 async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,8 +143,7 @@ async def removesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"couldn't remove: {e}")
 
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+def _get_help_text(user_id: int) -> str:
     is_admin = user_id in ADMIN_IDS
     text = (
         "Xtickerz Help.\n\n"
@@ -174,7 +173,38 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             " /setratelimit [n] : set hourly limit\n"
             " /resetsettings : reset to defaults\n"
         )
-    await update.message.reply_text(text)
+    return text
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = _get_help_text(update.effective_user.id)
+    await update.message.reply_text(text, reply_markup=help_keyboard())
+
+
+async def handle_help_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, action = query.data.split(":")
+    user_id = query.from_user.id
+    if action == "open":
+        text = _get_help_text(user_id)
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "back":
+        settings = state.get_settings()
+        text = settings["start_text"]
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=start_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=start_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=start_keyboard())
 
 
 # ---------- media intake ----------
@@ -533,4 +563,5 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(handle_crop_choice, pattern=r"^crop:"))
     app.add_handler(CallbackQueryHandler(handle_preview_choice, pattern=r"^preview:"))
     app.add_handler(CallbackQueryHandler(handle_emoji_choice, pattern=r"^emoji:"))
+    app.add_handler(CallbackQueryHandler(handle_help_nav, pattern=r"^help:"))
     app.add_handler(CallbackQueryHandler(checksub, pattern=r"^checksub$"))

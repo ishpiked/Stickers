@@ -35,3 +35,15 @@ def subscribe_keyboard(channel: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📢 join channel", url=f"https://t.me/{handle}")],
         [InlineKeyboardButton("✅ i've joined", callback_data="checksub")],
     ])
+
+
+def start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Help", callback_data="help:open")]
+    ])
+
+
+def help_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Back", callback_data="help:back")]
+    ])
