@@ -39,10 +39,10 @@ MAX_VIDEO_SECONDS = 3
 # ---- admin-editable settings: hardcoded fallbacks, live values in Redis ----
 DEFAULT_SETTINGS = {
     "start_text": (
-        "send me a photo, gif, or video and i'll turn it into a sticker ◝(ᵔᗜᵔ)◜\n\n"
-        "/newpack <name> — start a pack\n"
-        "/usepack <name> — switch pack\n"
-        "/mypacks — list your packs"
+        "Welcome to Xtickerz — Professional Sticker Studio.\n\n"
+        "Xtickerz helps you instantly convert photos, GIFs, and videos into high-quality Telegram stickers. "
+        "The bot is designed to make sticker creation simple, fast, and precise — no manual editing required.\n\n"
+        "Just send your media and your sticker will be ready in seconds."
     ),
     "start_image": "",              # telegram file_id, empty = no image
     "force_sub_channel": "@xtickerz",  # empty string = force-sub disabled
