@@ -39,10 +39,10 @@ MAX_VIDEO_SECONDS = 3
 # ---- admin-editable settings: hardcoded fallbacks, live values in Redis ----
 DEFAULT_SETTINGS = {
     "start_text": (
-        "Welcome to Xtickerz — Professional Sticker Studio.\n\n"
-        "Xtickerz helps you instantly convert photos, GIFs, and videos into high-quality Telegram stickers. "
-        "The bot is designed to make sticker creation simple, fast, and precise — no manual editing required.\n\n"
-        "Just send your media and your sticker will be ready in seconds."
+        "Welcome to Xtickerz.\n\n"
+        "Xtickerz helps you convert photos, GIFs and videos into Telegram stickers in seconds. "
+        "It is built to make sticker creation simple, fast and reliable without manual editing.\n\n"
+        "Just send your media to begin and your sticker will be ready instantly."
     ),
     "start_image": "",              # telegram file_id, empty = no image
     "force_sub_channel": "@xtickerz",  # empty string = force-sub disabled
