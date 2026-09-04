@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 from bot.config import BOT_USERNAME, ADMIN_IDS, MAX_STATIC_BYTES, MAX_VIDEO_BYTES
-from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard
+from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard
 from bot import state, media
 from bot.logger import log
 from bot.subscription import is_subscribed
@@ -207,6 +207,226 @@ async def handle_help_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text=text, reply_markup=start_keyboard())
 
 
+# ---------- start extra buttons ----------
+
+async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, action = query.data.split(":")
+    user_id = query.from_user.id
+    if action == "mypacks":
+        packs = state.list_user_packs(user_id)
+        visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+        # show all packs, but indicate hidden via detail view
+        if not packs:
+            text = "You have no packs yet. Tap Create to make a new pack."
+            try:
+                if query.message.photo:
+                    await query.edit_message_caption(caption=text, reply_markup=packs_keyboard([]))
+                else:
+                    await query.edit_message_text(text=text, reply_markup=packs_keyboard([]))
+            except BadRequest:
+                await query.edit_message_text(text=text, reply_markup=packs_keyboard([]))
+            return
+        text = "Your packs. Tap a pack to manage it."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=packs_keyboard(packs))
+            else:
+                await query.edit_message_text(text=text, reply_markup=packs_keyboard(packs))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=packs_keyboard(packs))
+    elif action == "create":
+        state.set_awaiting(user_id, "create_pack")
+        text = "Send pack name for new pack. Use only letters and numbers."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "stats":
+        packs = state.list_user_packs(user_id)
+        total = len(packs)
+        created = state.get_stat("stickers_created")
+        active = state.get_active_pack(user_id) or "none"
+        text = f"Stats.\nPacks: {total}\nStickers created: {created}\nActive pack: {active}"
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+
+
+async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, _, pack_name = query.data.split(":", 2)
+    user_id = query.from_user.id
+    if not state.is_owner_or_coowner(user_id, pack_name):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+    is_hidden = state.is_pack_hidden(user_id, pack_name)
+    try:
+        s = await context.bot.get_sticker_set(pack_name)
+        count = len(s.stickers)
+        title = s.title
+    except BadRequest:
+        count = 0
+        title = pack_name.split("_by_")[0].replace("_", " ")
+    text = f"Pack: {title}\nName: {pack_name}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}"
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+        else:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+    except BadRequest:
+        await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+
+
+async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":", 2)
+    # pack:action:pack_name
+    _, action, pack_name = parts
+    user_id = query.from_user.id
+    if not state.is_owner_or_coowner(user_id, pack_name):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+    if action == "add":
+        state.set_active_pack(user_id, pack_name)
+        state.add_user_pack(user_id, pack_name)
+        text = f"Active pack set to {pack_name}. Send a photo, GIF or video to add stickers."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+            else:
+                await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+    elif action == "rename":
+        state.set_awaiting(user_id, "rename_pack", {"pack": pack_name})
+        text = "Send new title for pack."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "frame":
+        state.set_awaiting(user_id, "set_frame", {"pack": pack_name})
+        text = "Send a photo to set as pack frame."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "stat":
+        try:
+            s = await context.bot.get_sticker_set(pack_name)
+            count = len(s.stickers)
+            title = s.title
+        except BadRequest:
+            count = 0
+            title = pack_name.split("_by_")[0].replace("_", " ")
+        coowners = state.list_coowners(pack_name)
+        co_text = ", ".join(str(x) for x in coowners) if coowners else "none"
+        is_hidden = state.is_pack_hidden(user_id, pack_name)
+        text = f"Pack stats.\nTitle: {title}\nName: {pack_name}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nCoowners: {co_text}"
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+            else:
+                await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+    elif action == "transfer":
+        state.set_awaiting(user_id, "transfer_pack", {"pack": pack_name})
+        text = "Send user id to give access to this pack."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "hide":
+        is_hidden = state.is_pack_hidden(user_id, pack_name)
+        if is_hidden:
+            state.show_pack(user_id, pack_name)
+            new_hidden = False
+            text = "Pack is now visible."
+        else:
+            state.hide_pack(user_id, pack_name)
+            new_hidden = True
+            text = "Pack is now hidden."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+            else:
+                await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+
+
+async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    awaiting = state.get_awaiting(user_id)
+    if not awaiting:
+        return False
+    action = awaiting.get("action")
+    data = awaiting.get("data", {})
+    text = update.message.text.strip() if update.message.text else ""
+    if action == "create_pack":
+        if not text:
+            await update.message.reply_text("Send a valid pack name.")
+            return True
+        pack_name = f"{text.replace(' ', '_')}_by_{BOT_USERNAME}"
+        state.set_active_pack(user_id, pack_name)
+        state.add_user_pack(user_id, pack_name)
+        state.clear_awaiting(user_id)
+        await update.message.reply_text(f"Pack created: {pack_name}. It is now active. Send media to add stickers.", reply_markup=pack_detail_keyboard(pack_name, False))
+        await log(context.bot, f"Pack created {pack_name} by user {user_id}")
+        return True
+    elif action == "rename_pack":
+        pack_name = data.get("pack")
+        if not pack_name or not text:
+            await update.message.reply_text("Send a valid title.")
+            return True
+        try:
+            await context.bot.set_sticker_set_title(name=pack_name, title=text)
+            state.clear_awaiting(user_id)
+            await update.message.reply_text("Pack renamed.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        except BadRequest as e:
+            await update.message.reply_text(f"Could not rename: {e}")
+        return True
+    elif action == "transfer_pack":
+        pack_name = data.get("pack")
+        try:
+            new_id = int(text)
+        except ValueError:
+            await update.message.reply_text("Send a valid user id.")
+            return True
+        state.add_coowner(pack_name, new_id)
+        state.clear_awaiting(user_id)
+        await update.message.reply_text(f"Access given to {new_id} for pack {pack_name}.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        await log(context.bot, f"Pack {pack_name} shared to {new_id} by {user_id}")
+        return True
+    return False
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await handle_awaiting_text(update, context):
+        return
+
+
 # ---------- media intake ----------
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,6 +435,27 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+    awaiting = state.get_awaiting(user_id)
+    if awaiting and awaiting.get("action") == "set_frame":
+        pack_name = awaiting["data"].get("pack")
+        if not update.message.photo:
+            await update.message.reply_text("Send a photo for frame.")
+            return
+        try:
+            file = await update.message.photo[-1].get_file()
+            local_path = media.tmp_path(".jpg")
+            await file.download_to_drive(local_path)
+            with open(local_path, "rb") as f:
+                await context.bot.set_sticker_set_thumbnail(name=pack_name, user_id=user_id, format="static", thumbnail=f)
+            os.remove(local_path)
+            state.clear_awaiting(user_id)
+            await update.message.reply_text("Frame updated.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        except BadRequest as e:
+            await update.message.reply_text(f"Could not set frame: {e}")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+        return
+
     if not state.check_rate_limit(user_id):
         await update.message.reply_text("slow down — hourly sticker limit hit, try again later")
         return
@@ -556,10 +797,14 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("setratelimit", setratelimit))
     app.add_handler(CommandHandler("resetsettings", resetsettings))
 
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.Document.ALL,
         handle_media,
     ))
+    app.add_handler(CallbackQueryHandler(handle_start_nav, pattern=r"^start:"))
+    app.add_handler(CallbackQueryHandler(handle_pack_view, pattern=r"^pack:view:"))
+    app.add_handler(CallbackQueryHandler(handle_pack_action, pattern=r"^pack:(add|rename|frame|stat|transfer|hide):"))
     app.add_handler(CallbackQueryHandler(handle_crop_choice, pattern=r"^crop:"))
     app.add_handler(CallbackQueryHandler(handle_preview_choice, pattern=r"^preview:"))
     app.add_handler(CallbackQueryHandler(handle_emoji_choice, pattern=r"^emoji:"))

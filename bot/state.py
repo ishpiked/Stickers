@@ -47,6 +47,57 @@ def list_user_packs(user_id: int) -> list[str]:
     return list(redis.smembers(f"packs:{user_id}") or [])
 
 
+def is_pack_hidden(user_id: int, pack_name: str) -> bool:
+    return redis.sismember(f"hidden:{user_id}", pack_name) == 1
+
+
+def hide_pack(user_id: int, pack_name: str) -> None:
+    redis.sadd(f"hidden:{user_id}", pack_name)
+
+
+def show_pack(user_id: int, pack_name: str) -> None:
+    redis.srem(f"hidden:{user_id}", pack_name)
+
+
+def list_visible_packs(user_id: int) -> list[str]:
+    all_packs = list_user_packs(user_id)
+    return [p for p in all_packs if not is_pack_hidden(user_id, p)]
+
+
+# ---------- coownership ----------
+
+def add_coowner(pack_name: str, user_id: int) -> None:
+    redis.sadd(f"coowners:{pack_name}", str(user_id))
+    redis.sadd(f"packs:{user_id}", pack_name)
+
+
+def list_coowners(pack_name: str) -> list[int]:
+    members = redis.smembers(f"coowners:{pack_name}") or []
+    return [int(x) for x in members]
+
+
+def is_owner_or_coowner(user_id: int, pack_name: str) -> bool:
+    if pack_name in list_user_packs(user_id):
+        return True
+    return redis.sismember(f"coowners:{pack_name}", str(user_id)) == 1
+
+
+# ---------- awaiting actions for button flows ----------
+
+def set_awaiting(user_id: int, action: str, data: dict | None = None) -> None:
+    payload = {"action": action, "data": data or {}}
+    redis.set(f"await:{user_id}", json.dumps(payload), ex=600)
+
+
+def get_awaiting(user_id: int) -> dict | None:
+    raw = redis.get(f"await:{user_id}")
+    return json.loads(raw) if raw else None
+
+
+def clear_awaiting(user_id: int) -> None:
+    redis.delete(f"await:{user_id}")
+
+
 # ---------- bans ----------
 
 def is_banned(user_id: int) -> bool:
