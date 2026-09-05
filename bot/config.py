@@ -39,7 +39,7 @@ MAX_VIDEO_SECONDS = 3
 # ---- admin-editable settings: hardcoded fallbacks, live values in Redis ----
 DEFAULT_SETTINGS = {
     "start_text": (
-        "<b>Xtickerz Studio</b>\n"
+        "<b>Xtickerz</b>\n"
         "<blockquote>Turn any file into a sticker. Fast. Simple. No editing.</blockquote>\n"
         "Tap Create to make a new pack, or just send a file."
     ),

@@ -1,8 +1,16 @@
+import logging
+
 from telegram import BotCommand
 from telegram.ext import Application
 
 from bot.config import BOT_TOKEN
 from bot.handlers import register_handlers, error_handler
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=logging.INFO,
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)  # quiet the per-request noise
 
 
 async def post_init(app: Application):
@@ -18,6 +26,7 @@ async def post_init(app: Application):
         "Xtickerz converts photos, GIFs and videos into high quality Telegram stickers. "
         "Create and manage packs with simple buttons. No manual editing required."
     )
+    logging.getLogger("xtickerzbot").info("bot started, commands registered")
 
 
 def main():
