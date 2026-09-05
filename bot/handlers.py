@@ -80,6 +80,9 @@ async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not clean_link.isalnum():
         await update.message.reply_text("Link must use only letters and numbers.")
         return
+    if not clean_link[0].isalpha():
+        await update.message.reply_text("Link must start with a letter.")
+        return
     if len(clean_link) < 2 or len(clean_link) > 30:
         await update.message.reply_text("Link must be 2 to 30 characters.")
         return
@@ -87,6 +90,12 @@ async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if pack_name in state.list_user_packs(user_id):
         await update.message.reply_text("You already have a pack with this link.")
         return
+    try:
+        await context.bot.get_sticker_set(pack_name)
+        await update.message.reply_text("This link is taken. Try another.")
+        return
+    except BadRequest:
+        pass
     state.set_active_pack(user_id, pack_name)
     state.add_user_pack(user_id, pack_name)
     state.set_pack_title(pack_name, title)
@@ -514,6 +523,9 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
         if not clean_link.isalnum():
             await update.message.reply_text("Link must use only letters and numbers.")
             return True
+        if not clean_link[0].isalpha():
+            await update.message.reply_text("Link must start with a letter.")
+            return True
         if len(clean_link) < 2 or len(clean_link) > 30:
             await update.message.reply_text("Link must be 2 to 30 characters.")
             return True
@@ -775,8 +787,15 @@ async def build_preview(chat_id, context, job_id, job, crop):
                         else:
                             raise
                 elif "title" in err or "name" in err or "invalid" in err:
-                    await context.bot.send_message(chat_id, f"Pack name or title invalid. Try a different link or name.")
-                    raise
+                    state.delete_user_pack(user_id, pack_name)
+                    await context.bot.send_message(chat_id, f"Pack name or title invalid. This pack has been removed. Please create a new pack. Use only letters and numbers for link, starting with a letter.")
+                    state.clear_job(job_id)
+                    try:
+                        os.remove(out_path)
+                    except Exception:
+                        pass
+                    _cleanup_out_path(job)
+                    return
                 elif "sticker" in err or "file" in err or "format" in err:
                     await context.bot.send_message(chat_id, f"Sticker file invalid. Try another image.")
                     raise
@@ -796,7 +815,12 @@ async def build_preview(chat_id, context, job_id, job, crop):
         await context.bot.send_message(chat_id, f"Sticker added to {display}. This pack now has {count} stickers.")
         await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
     except BadRequest as e:
-        await context.bot.send_message(chat_id, f"Could not create sticker: {e}")
+        err2 = str(e).lower()
+        if "invalid" in err2 and ("name" in err2 or "title" in err2):
+            state.delete_user_pack(user_id, pack_name)
+            await context.bot.send_message(chat_id, f"Pack name or title invalid. This pack has been removed. Please create a new pack.")
+        else:
+            await context.bot.send_message(chat_id, f"Could not create sticker: {e}")
         await log(context.bot, f"Sticker failed for user {user_id}: {e}")
         raise
     except Exception as e:
