@@ -725,21 +725,30 @@ async def build_preview(chat_id, context, job_id, job, crop):
                     stickers=[sticker],
                 )
             except BadRequest as e:
-                if "already" not in str(e).lower() and "exist" not in str(e).lower():
-                    raise
-                f.seek(0)
-                try:
-                    await context.bot.add_sticker_to_set(user_id=user_id, name=pack_name, sticker=sticker)
-                except BadRequest as e2:
-                    if "owner" in str(e2).lower() or "not found" in str(e2).lower():
-                        owner = state.get_pack_owner(pack_name)
-                        if owner and owner != user_id:
-                            f.seek(0)
-                            await context.bot.add_sticker_to_set(user_id=owner, name=pack_name, sticker=sticker)
+                err = str(e).lower()
+                if "already" in err or "exist" in err or "occupied" in err:
+                    f.seek(0)
+                    try:
+                        await context.bot.add_sticker_to_set(user_id=user_id, name=pack_name, sticker=sticker)
+                    except BadRequest as e2:
+                        err2 = str(e2).lower()
+                        if "owner" in err2 or "not found" in err2 or "invalid" in err2:
+                            owner = state.get_pack_owner(pack_name)
+                            if owner and owner != user_id:
+                                f.seek(0)
+                                await context.bot.add_sticker_to_set(user_id=owner, name=pack_name, sticker=sticker)
+                            else:
+                                raise
                         else:
                             raise
-                    else:
-                        raise
+                elif "title" in err or "name" in err or "invalid" in err:
+                    await context.bot.send_message(chat_id, f"Pack name or title invalid. Try a different link or name.")
+                    raise
+                elif "sticker" in err or "file" in err or "format" in err:
+                    await context.bot.send_message(chat_id, f"Sticker file invalid. Try another image.")
+                    raise
+                else:
+                    raise
         state.add_user_pack(user_id, pack_name)
         state.bump_sticker_use(pack_name)
         stored = state.get_pack_title(pack_name)
@@ -749,10 +758,16 @@ async def build_preview(chat_id, context, job_id, job, crop):
             count = len(s.stickers)
         except BadRequest:
             count = state.get_pack_uses(pack_name)
+            if count == 0:
+                count = 1
         await context.bot.send_message(chat_id, f"Sticker added to {display}. This pack now has {count} stickers.")
         await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
+    except BadRequest as e:
+        await context.bot.send_message(chat_id, f"Could not create sticker: {e}")
+        await log(context.bot, f"Sticker failed for user {user_id}: {e}")
+        raise
     except Exception as e:
-        await context.bot.send_message(chat_id, "Could not create sticker. Please try again.")
+        await context.bot.send_message(chat_id, f"Could not create sticker: {e}")
         await log(context.bot, f"Sticker failed for user {user_id}: {e}")
         raise
     finally:
