@@ -308,6 +308,9 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not state.is_owner_or_coowner(user_id, pack_name):
         await query.answer("Not your pack.", show_alert=True)
         return
+    state.clear_awaiting(user_id)
+    state.set_active_pack(user_id, pack_name)
+    state.add_user_pack(user_id, pack_name)
     is_hidden = state.is_pack_hidden(user_id, pack_name)
     try:
         s = await context.bot.get_sticker_set(pack_name)
@@ -316,7 +319,7 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         count = 0
         title = pack_name.split("_by_")[0].replace("_", " ")
-    text = f"Pack: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}"
+    text = f"Pack: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nSend a photo, GIF or video to add stickers to this pack."
     try:
         if query.message.photo:
             await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))

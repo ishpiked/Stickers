@@ -72,8 +72,7 @@ def packs_keyboard(packs: list[str]) -> InlineKeyboardMarkup:
 def pack_detail_keyboard(pack_name: str, is_hidden: bool) -> InlineKeyboardMarkup:
     hide_label = "Show" if is_hidden else "Hide"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Add Sticker", callback_data=f"pack:add:{pack_name}"), InlineKeyboardButton("Rename", callback_data=f"pack:rename:{pack_name}")],
-        [InlineKeyboardButton("Set Frame", callback_data=f"pack:frame:{pack_name}"), InlineKeyboardButton("View Stats", callback_data=f"pack:stat:{pack_name}")],
-        [InlineKeyboardButton("Transfer", callback_data=f"pack:transfer:{pack_name}"), InlineKeyboardButton(hide_label, callback_data=f"pack:hide:{pack_name}")],
-        [InlineKeyboardButton("Back", callback_data="start:mypacks")]
+        [InlineKeyboardButton("Rename", callback_data=f"pack:rename:{pack_name}"), InlineKeyboardButton("Set Frame", callback_data=f"pack:frame:{pack_name}")],
+        [InlineKeyboardButton("View Stats", callback_data=f"pack:stat:{pack_name}"), InlineKeyboardButton("Transfer", callback_data=f"pack:transfer:{pack_name}")],
+        [InlineKeyboardButton(hide_label, callback_data=f"pack:hide:{pack_name}"), InlineKeyboardButton("Back", callback_data="start:mypacks")]
     ])
