@@ -5,7 +5,15 @@ CROP_LABELS = {
     "top": "Top", "middle": "Middle", "bottom": "Bottom",
 }
 
-QUICK_EMOJIS = ["😀", "😂", "😍", "🔥", "💀", "🎉"]
+EMOJI_LABELS = {
+    "Happy": "😀",
+    "Laugh": "😂",
+    "Love": "😍",
+    "Fire": "🔥",
+    "Skull": "💀",
+    "Party": "🎉",
+}
+QUICK_EMOJIS = list(EMOJI_LABELS.keys())
 
 
 def crop_choice_keyboard(job_id: str, options: list[str]) -> InlineKeyboardMarkup:
@@ -25,7 +33,7 @@ def preview_keyboard(job_id: str, allow_redo: bool) -> InlineKeyboardMarkup:
 
 
 def emoji_keyboard(job_id: str) -> InlineKeyboardMarkup:
-    row = [InlineKeyboardButton(e, callback_data=f"emoji:{job_id}:{e}") for e in QUICK_EMOJIS]
+    row = [InlineKeyboardButton(label, callback_data=f"emoji:{job_id}:{EMOJI_LABELS[label]}") for label in QUICK_EMOJIS]
     return InlineKeyboardMarkup([row[:3], row[3:], [InlineKeyboardButton("Default", callback_data=f"emoji:{job_id}:default")]])
 
 
