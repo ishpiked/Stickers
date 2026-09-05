@@ -57,9 +57,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     settings = state.get_settings()
     if settings["start_image"]:
-        await update.message.reply_photo(settings["start_image"], caption=settings["start_text"], reply_markup=start_keyboard())
+        await update.message.reply_photo(settings["start_image"], caption=settings["start_text"], parse_mode="HTML", reply_markup=start_keyboard())
     else:
-        await update.message.reply_text(settings["start_text"], reply_markup=start_keyboard())
+        await update.message.reply_text(settings["start_text"], parse_mode="HTML", reply_markup=start_keyboard())
 
 
 async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,31 +187,32 @@ async def removesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _get_help_text(user_id: int) -> str:
     is_admin = user_id in ADMIN_IDS
     text = (
-        "Xtickerz Help.\n\n"
-        "Xtickerz converts photos, GIFs and videos into Telegram stickers.\n\n"
-        "Commands:\n"
+        "<b>Xtickerz Help</b>\n"
+        "<blockquote>Convert photos, GIFs and videos into Telegram stickers. Manage packs with simple buttons.</blockquote>\n\n"
+        "<b>Commands</b>\n"
         " /start : view welcome message\n"
-        " /newpack [name] : create a new pack\n"
-        " /usepack [name] : switch to your pack\n"
+        " /newpack [name] [link] : create a new pack\n"
         " /mypacks : list your packs\n"
-        " /renamepack [name] [new title] : rename a pack you own\n"
-        " /removesticker : reply to a sticker to remove it\n"
-        " /cancel : cancel current action\n"
-        " /help : view this message\n\n"
-        "Send any photo, GIF or video and it will be prepared as a sticker for your active pack.\n"
+        " /help : view this message\n"
+        " /cancel : cancel current action\n\n"
+        "<b>How to use</b>\n"
+        " 1. Tap Create or use /newpack\n"
+        " 2. Send link for the pack\n"
+        " 3. Send any file to add stickers\n"
+        " 4. Use My Packs to manage packs\n"
     )
     if is_admin:
         text += (
-            "\nAdmin:\n"
+            "\n<b>Admin</b>\n"
             " /ban [id] : ban a user\n"
             " /unban [id] : unban a user\n"
-            " /stats : view sticker count\n"
+            " /stats : view global stats\n"
             " /health : check service status\n"
-            " /broadcast [text] : send message to all chats\n"
+            " /broadcast [text] : send to all chats\n"
             " /settings : view settings\n"
             " /setstarttext [text] : update welcome text\n"
-            " /setstartimage : reply to a photo to update welcome image, use [none] to clear\n"
-            " /setforcesub [channel or off] : set force join channel\n"
+            " /setstartimage : reply to photo to update image, use [none] to clear\n"
+            " /setforcesub [channel or off] : set force channel\n"
             " /setratelimit [n] : set hourly limit\n"
             " /resetsettings : reset to defaults\n"
         )
@@ -220,7 +221,7 @@ def _get_help_text(user_id: int) -> str:
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = _get_help_text(update.effective_user.id)
-    await update.message.reply_text(text, reply_markup=help_keyboard())
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=help_keyboard())
 
 
 async def handle_help_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,21 +236,21 @@ async def handle_help_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = _get_help_text(user_id)
         try:
             if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=help_keyboard())
             else:
-                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
         except BadRequest:
-            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
     elif action == "back":
         settings = state.get_settings()
         text = settings["start_text"]
         try:
             if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=start_keyboard())
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=start_keyboard())
             else:
-                await query.edit_message_text(text=text, reply_markup=start_keyboard())
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=start_keyboard())
         except BadRequest:
-            await query.edit_message_text(text=text, reply_markup=start_keyboard())
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=start_keyboard())
 
 
 # ---------- start extra buttons ----------
@@ -310,7 +311,8 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if active != "none":
             active = active.split("_by_")[0].replace("_", " ")
         text = (
-            f"Stats.\n"
+            f"<b>Stats</b>\n"
+            f"<blockquote>Your sticker activity overview</blockquote>\n"
             f"Packs: {total}\n"
             f"Total stickers: {total_uses}\n"
             f"Most used pack: {most_display}\n"
@@ -322,11 +324,11 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=help_keyboard())
             else:
-                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
         except BadRequest:
-            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
 
 
 async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -354,14 +356,20 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = 0
         title = stored_title or pack_name.split("_by_")[0].replace("_", " ")
     link = watermark or pack_name.split("_by_")[0] + "_by_xtickerz"
-    text = f"Pack: {title}\nLink: https://t.me/addstickers/{pack_name}\nWatermark: {link}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nSend a photo, GIF or video to add stickers to this pack."
+    text = (
+        f"<b>{title}</b>\n"
+        f"<blockquote>https://t.me/addstickers/{pack_name}</blockquote>\n"
+        f"Stickers: {count} | Hidden: {'yes' if is_hidden else 'no'}\n"
+        f"Watermark: {link}\n\n"
+        f"Send a photo, GIF or video to add stickers to this pack."
+    )
     try:
         if query.message.photo:
-            await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, is_hidden))
         else:
-            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, is_hidden))
     except BadRequest:
-        await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+        await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, is_hidden))
 
 
 async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
