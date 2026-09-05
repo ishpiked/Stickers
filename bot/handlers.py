@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from bot.config import BOT_USERNAME, ADMIN_IDS, MAX_STATIC_BYTES, MAX_VIDEO_BYTES
-from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard, delete_confirm_keyboard
+from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard, delete_confirm_keyboard, duplicate_keyboard
 from bot import state, media
 from bot.logger import log
 from bot.subscription import is_subscribed
@@ -496,6 +496,76 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await log(context.bot, f"Pack {pack_name} deleted by user {user_id}")
 
 
+async def handle_duplicate_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        _, action, pack_name, file_unique_id = query.data.split(":", 3)
+    except ValueError:
+        await query.edit_message_text("Invalid request. Please send the file again.")
+        return
+    user_id = query.from_user.id
+    awaiting = state.get_awaiting(user_id)
+    if not awaiting or awaiting.get("action") != "duplicate_pending":
+        await query.edit_message_text("Request expired. Please send the file again.")
+        return
+    data = awaiting.get("data", {})
+    if data.get("pack") != pack_name or data.get("file_unique_id") != file_unique_id:
+        await query.edit_message_text("Request expired. Please send the file again.")
+        return
+    file_id = data.get("file_id")
+    kind = data.get("kind", "photo")
+    if action == "add":
+        state.clear_awaiting(user_id)
+        await query.edit_message_text("Adding duplicate sticker. Please wait.")
+        # Create a job and directly add
+        job_id = str(uuid.uuid4().hex)
+        job = {
+            "kind": kind, "file_id": file_id, "file_path": "",
+            "pack": pack_name, "width": 512, "height": 512,
+            "user_id": user_id, "file_unique_id": file_unique_id,
+        }
+        state.save_job(job_id, job)
+        await build_preview(query.message.chat_id, context, job_id, job, crop=None)
+    elif action == "replace":
+        old_file_id = state.get_file_sticker(pack_name, file_unique_id)
+        if old_file_id:
+            try:
+                await context.bot.delete_sticker_from_set(sticker=old_file_id)
+                state.remove_file_from_pack(pack_name, file_unique_id)
+                await query.edit_message_text("Old sticker deleted. Adding new one. Please wait.")
+            except BadRequest as e:
+                await query.edit_message_text(f"Could not delete old sticker: {e}")
+                state.clear_awaiting(user_id)
+                return
+        else:
+            await query.edit_message_text("No existing sticker found to replace. Adding new one. Please wait.")
+        state.clear_awaiting(user_id)
+        job_id = str(uuid.uuid4().hex)
+        job = {
+            "kind": kind, "file_id": file_id, "file_path": "",
+            "pack": pack_name, "width": 512, "height": 512,
+            "user_id": user_id, "file_unique_id": file_unique_id,
+        }
+        state.save_job(job_id, job)
+        await build_preview(query.message.chat_id, context, job_id, job, crop=None)
+    elif action == "delete":
+        old_file_id = state.get_file_sticker(pack_name, file_unique_id)
+        if old_file_id:
+            try:
+                await context.bot.delete_sticker_from_set(sticker=old_file_id)
+                state.remove_file_from_pack(pack_name, file_unique_id)
+                await query.edit_message_text("Existing sticker deleted.")
+            except BadRequest as e:
+                await query.edit_message_text(f"Could not delete: {e}")
+        else:
+            await query.edit_message_text("No existing sticker found to delete.")
+        state.clear_awaiting(user_id)
+    elif action == "cancel":
+        state.clear_awaiting(user_id)
+        await query.edit_message_text("Cancelled.")
+
+
 async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     awaiting = state.get_awaiting(user_id)
@@ -679,6 +749,17 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Send a photo, GIF or video.")
         return
 
+    file_unique_id = getattr(tg_file, "file_unique_id", None)
+    if file_unique_id and state.is_duplicate_file(active_pack, file_unique_id):
+        stored = state.get_pack_title(active_pack)
+        display = stored or active_pack.split("_by_")[0].replace("_", " ")
+        await update.message.reply_text(
+            f"This file is already in pack {display}. Add again, replace existing, or delete?",
+            reply_markup=duplicate_keyboard(active_pack, file_unique_id)
+        )
+        state.set_awaiting(user_id, "duplicate_pending", {"pack": active_pack, "file_id": tg_file.file_id, "file_unique_id": file_unique_id, "kind": kind})
+        return
+
     try:
         file = await tg_file.get_file()
     except Exception:
@@ -706,6 +787,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "kind": kind, "file_id": tg_file.file_id, "file_path": file.file_path,
         "pack": active_pack, "width": width, "height": height,
         "user_id": user_id,
+        "file_unique_id": getattr(tg_file, "file_unique_id", ""),
     }
     state.save_job(job_id, job)
 
@@ -812,6 +894,9 @@ async def build_preview(chat_id, context, job_id, job, crop):
                     raise
         state.add_user_pack(user_id, pack_name)
         state.bump_sticker_use(pack_name)
+        file_uid = job.get("file_unique_id")
+        if file_uid:
+            state.add_file_to_pack(pack_name, file_uid, job.get("file_id", ""))
         stored = state.get_pack_title(pack_name)
         display = stored or pack_name.split("_by_")[0].replace("_", " ")
         try:
@@ -821,7 +906,8 @@ async def build_preview(chat_id, context, job_id, job, crop):
             count = state.get_pack_uses(pack_name)
             if count == 0:
                 count = 1
-        await context.bot.send_message(chat_id, f"Sticker added to {display}. This pack now has {count} stickers.")
+        link = f"https://t.me/addstickers/{pack_name}"
+        await context.bot.send_message(chat_id, f"Sticker added to {display}. This pack now has {count} stickers.\n{link}", disable_web_page_preview=False)
         await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
     except BadRequest as e:
         err2 = str(e).lower()
@@ -1132,6 +1218,7 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(handle_start_nav, pattern=r"^start:"))
     app.add_handler(CallbackQueryHandler(handle_pack_view, pattern=r"^pack:view:"))
     app.add_handler(CallbackQueryHandler(handle_pack_action, pattern=r"^pack:(add|rename|frame|stat|transfer|hide|delete_confirm|delete):"))
+    app.add_handler(CallbackQueryHandler(handle_duplicate_choice, pattern=r"^dup:"))
     app.add_handler(CallbackQueryHandler(handle_crop_choice, pattern=r"^crop:"))
     app.add_handler(CallbackQueryHandler(handle_preview_choice, pattern=r"^preview:"))
     app.add_handler(CallbackQueryHandler(handle_emoji_choice, pattern=r"^emoji:"))

@@ -241,6 +241,26 @@ def get_week_packs_count() -> int:
     return int(val) if val else 0
 
 
+# ---------- duplicate file handling ----------
+
+def is_duplicate_file(pack_name: str, file_unique_id: str) -> bool:
+    return redis.sismember(f"pack:files:{pack_name}", file_unique_id) == 1
+
+
+def add_file_to_pack(pack_name: str, file_unique_id: str, sticker_file_id: str) -> None:
+    redis.sadd(f"pack:files:{pack_name}", file_unique_id)
+    redis.hset(f"pack:filemap:{pack_name}", file_unique_id, sticker_file_id)
+
+
+def get_file_sticker(pack_name: str, file_unique_id: str) -> str | None:
+    return redis.hget(f"pack:filemap:{pack_name}", file_unique_id)
+
+
+def remove_file_from_pack(pack_name: str, file_unique_id: str) -> None:
+    redis.srem(f"pack:files:{pack_name}", file_unique_id)
+    redis.hdel(f"pack:filemap:{pack_name}", file_unique_id)
+
+
 # ---------- known chats, for broadcast ----------
 
 def remember_chat(chat_id: int) -> None:

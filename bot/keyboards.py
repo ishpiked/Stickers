@@ -95,6 +95,13 @@ def pack_detail_keyboard(pack_name: str, is_hidden: bool) -> InlineKeyboardMarku
     ])
 
 
+def duplicate_keyboard(pack_name: str, file_unique_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Add", callback_data=f"dup:add:{pack_name}:{file_unique_id}"), InlineKeyboardButton("Replace", callback_data=f"dup:replace:{pack_name}:{file_unique_id}")],
+        [InlineKeyboardButton("Delete", callback_data=f"dup:delete:{pack_name}:{file_unique_id}"), InlineKeyboardButton("Cancel", callback_data=f"dup:cancel:{pack_name}:{file_unique_id}")]
+    ])
+
+
 def delete_confirm_keyboard(pack_name: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Confirm Delete", callback_data=f"pack:delete_confirm:{pack_name}")],
