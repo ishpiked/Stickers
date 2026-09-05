@@ -1,6 +1,7 @@
 import os
 import uuid
 import traceback
+import random
 
 from telegram import Update, InputSticker
 from telegram.error import BadRequest, Forbidden
@@ -13,6 +14,8 @@ from bot.config import BOT_USERNAME, ADMIN_IDS, MAX_STATIC_BYTES, MAX_VIDEO_BYTE
 from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard
 from bot import state, media
 from bot.logger import log
+
+RANDOM_EMOJIS = ["😀", "😂", "😍", "🔥", "💀", "🎉"]
 from bot.subscription import is_subscribed
 
 
@@ -606,6 +609,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job = {
         "kind": kind, "file_id": tg_file.file_id, "file_path": file.file_path,
         "pack": active_pack, "width": width, "height": height,
+        "user_id": user_id,
     }
     state.save_job(job_id, job)
 
@@ -664,11 +668,56 @@ async def build_preview(chat_id, context, job_id, job, crop):
     job["sticker_format"] = sticker_format
     state.save_job(job_id, job)
 
-    allow_redo = media.needs_crop(job["width"], job["height"])
-    with open(out_path, "rb") as f:
-        await context.bot.send_sticker(
-            chat_id, sticker=f, reply_markup=preview_keyboard(job_id, allow_redo)
-        )
+    # Direct add with random emoji, no preview step
+    pack_name = job["pack"]
+    user_id = job.get("user_id") or chat_id
+    try:
+        with open(out_path, "rb") as f:
+            emoji = random.choice(RANDOM_EMOJIS)
+            sticker = InputSticker(sticker=f, format=sticker_format, emoji_list=[emoji])
+            try:
+                await context.bot.create_new_sticker_set(
+                    user_id=user_id, name=pack_name,
+                    title=pack_name.split("_by_")[0].replace("_", " "),
+                    stickers=[sticker],
+                )
+            except BadRequest as e:
+                if "already" not in str(e).lower() and "exist" not in str(e).lower():
+                    raise
+                f.seek(0)
+                try:
+                    await context.bot.add_sticker_to_set(user_id=user_id, name=pack_name, sticker=sticker)
+                except BadRequest as e2:
+                    if "owner" in str(e2).lower() or "not found" in str(e2).lower():
+                        owner = state.get_pack_owner(pack_name)
+                        if owner and owner != user_id:
+                            f.seek(0)
+                            await context.bot.add_sticker_to_set(user_id=owner, name=pack_name, sticker=sticker)
+                        else:
+                            raise
+                    else:
+                        raise
+        state.add_user_pack(user_id, pack_name)
+        state.bump_sticker_use(pack_name)
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        try:
+            s = await context.bot.get_sticker_set(pack_name)
+            count = len(s.stickers)
+        except BadRequest:
+            count = state.get_pack_uses(pack_name)
+        await context.bot.send_message(chat_id, f"Sticker added to {display}. This pack now has {count} stickers.")
+        await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
+    except Exception as e:
+        await context.bot.send_message(chat_id, "Could not create sticker. Please try again.")
+        await log(context.bot, f"Sticker failed for user {user_id}: {e}")
+        raise
+    finally:
+        _cleanup_out_path(job)
+        state.clear_job(job_id)
+        try:
+            os.remove(out_path)
+        except Exception:
+            pass
 
 
 async def handle_preview_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
