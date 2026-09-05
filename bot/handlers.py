@@ -11,12 +11,12 @@ from telegram.ext import (
 )
 
 from bot.config import BOT_USERNAME, ADMIN_IDS, MAX_STATIC_BYTES, MAX_VIDEO_BYTES
-from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard
+from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard, delete_confirm_keyboard
 from bot import state, media
 from bot.logger import log
+from bot.subscription import is_subscribed
 
 RANDOM_EMOJIS = ["😀", "😂", "😍", "🔥", "💀", "🎉"]
-from bot.subscription import is_subscribed
 
 
 # ---------- gates shared by user facing handlers ----------
@@ -447,6 +447,39 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
         except BadRequest:
             await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+    elif action == "delete":
+        if not state.is_original_owner(user_id, pack_name):
+            await query.answer("Only the pack owner can delete.", show_alert=True)
+            return
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        text = f"Delete pack {display}? This cannot be undone."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=delete_confirm_keyboard(pack_name))
+            else:
+                await query.edit_message_text(text=text, reply_markup=delete_confirm_keyboard(pack_name))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=delete_confirm_keyboard(pack_name))
+    elif action == "delete_confirm":
+        if not state.is_original_owner(user_id, pack_name):
+            await query.answer("Only the pack owner can delete.", show_alert=True)
+            return
+        try:
+            await context.bot.delete_sticker_set(name=pack_name)
+        except Exception:
+            pass
+        state.delete_user_pack(user_id, pack_name)
+        packs = state.list_user_packs(user_id)
+        visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+        text = "Pack deleted."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=packs_keyboard(visible))
+            else:
+                await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
+        await log(context.bot, f"Pack {pack_name} deleted by user {user_id}")
 
 
 async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1065,7 +1098,7 @@ def register_handlers(app: Application):
     ))
     app.add_handler(CallbackQueryHandler(handle_start_nav, pattern=r"^start:"))
     app.add_handler(CallbackQueryHandler(handle_pack_view, pattern=r"^pack:view:"))
-    app.add_handler(CallbackQueryHandler(handle_pack_action, pattern=r"^pack:(add|rename|frame|stat|transfer|hide):"))
+    app.add_handler(CallbackQueryHandler(handle_pack_action, pattern=r"^pack:(add|rename|frame|stat|transfer|hide|delete_confirm|delete):"))
     app.add_handler(CallbackQueryHandler(handle_crop_choice, pattern=r"^crop:"))
     app.add_handler(CallbackQueryHandler(handle_preview_choice, pattern=r"^preview:"))
     app.add_handler(CallbackQueryHandler(handle_emoji_choice, pattern=r"^emoji:"))

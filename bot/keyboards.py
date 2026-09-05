@@ -90,5 +90,13 @@ def pack_detail_keyboard(pack_name: str, is_hidden: bool) -> InlineKeyboardMarku
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Rename", callback_data=f"pack:rename:{pack_name}"), InlineKeyboardButton("Set Frame", callback_data=f"pack:frame:{pack_name}")],
         [InlineKeyboardButton("View Stats", callback_data=f"pack:stat:{pack_name}"), InlineKeyboardButton("Transfer", callback_data=f"pack:transfer:{pack_name}")],
-        [InlineKeyboardButton(hide_label, callback_data=f"pack:hide:{pack_name}"), InlineKeyboardButton("Back", callback_data="start:mypacks")]
+        [InlineKeyboardButton(hide_label, callback_data=f"pack:hide:{pack_name}"), InlineKeyboardButton("Delete", callback_data=f"pack:delete:{pack_name}")],
+        [InlineKeyboardButton("Back", callback_data="start:mypacks")]
+    ])
+
+
+def delete_confirm_keyboard(pack_name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Confirm Delete", callback_data=f"pack:delete_confirm:{pack_name}")],
+        [InlineKeyboardButton("Cancel", callback_data=f"pack:view:{pack_name}")]
     ])

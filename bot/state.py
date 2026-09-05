@@ -67,6 +67,23 @@ def show_pack(user_id: int, pack_name: str) -> None:
     redis.srem(f"hidden:{user_id}", pack_name)
 
 
+def delete_user_pack(user_id: int, pack_name: str) -> None:
+    redis.srem(f"packs:{user_id}", pack_name)
+    redis.srem(f"hidden:{user_id}", pack_name)
+    redis.srem(f"coowners:{pack_name}", str(user_id))
+    if get_active_pack(user_id) == pack_name:
+        redis.delete(f"pack:{user_id}")
+    # Clear title if no one else owns it
+    try:
+        owner = get_pack_owner(pack_name)
+        if not owner:
+            redis.delete(f"pack:title:{pack_name}")
+            redis.delete(f"pack:uses:{pack_name}")
+            redis.delete(f"coowners:{pack_name}")
+    except Exception:
+        pass
+
+
 def list_visible_packs(user_id: int) -> list[str]:
     all_packs = list_user_packs(user_id)
     return [p for p in all_packs if not is_pack_hidden(user_id, p)]
