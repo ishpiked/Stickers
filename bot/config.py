@@ -40,8 +40,8 @@ MAX_VIDEO_SECONDS = 3
 DEFAULT_SETTINGS = {
     "start_text": (
         "<b>Xtickerz Studio</b>\n"
-        "<blockquote>Turn any photo, GIF or video into a sticker. Build packs and share.</blockquote>\n"
-        "Send a file to add to your active pack, or tap Create to start a new one."
+        "<blockquote>Turn any file into a sticker. Fast. Simple. No editing.</blockquote>\n"
+        "Tap Create to make a new pack, or just send a file."
     ),
     "start_image": "",              # telegram file_id, empty = no image
     "force_sub_channel": "@xtickerz",  # empty string = force-sub disabled
