@@ -542,9 +542,17 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     active_pack = state.get_active_pack(user_id)
     if not active_pack:
-        await update.message.reply_text("Set a pack first. Use /newpack [name] or /usepack [name]")
-        return
-
+        packs = state.list_user_packs(user_id)
+        if packs:
+            active_pack = packs[0]
+            state.set_active_pack(user_id, active_pack)
+        else:
+            clean = f"pack{user_id % 10000}"
+            active_pack = f"{clean}_by_{BOT_USERNAME.lower()}"
+            state.set_active_pack(user_id, active_pack)
+            state.add_user_pack(user_id, active_pack)
+            display = clean.replace("_", " ")
+            await update.message.reply_text(f"New pack created: {display}. Adding sticker there.")
     msg = update.message
     if msg.photo:
         tg_file, kind = msg.photo[-1], "photo"
@@ -552,18 +560,47 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_file, kind = msg.video, "video"
     elif msg.animation:
         tg_file, kind = msg.animation, "gif"
-    elif msg.document and (msg.document.mime_type or "").startswith(("image/", "video/")):
+    elif msg.sticker:
+        tg_file = msg.sticker
+        if getattr(msg.sticker, "is_video", False) or getattr(msg.sticker, "is_animated", False):
+            kind = "video"
+        else:
+            kind = "photo"
+    elif msg.document:
+        mime = (msg.document.mime_type or "").lower()
+        name = (msg.document.file_name or "").lower()
         tg_file = msg.document
-        kind = "video" if "video" in msg.document.mime_type else "photo"
+        if "video" in mime or "gif" in mime or "animation" in mime or name.endswith((".mp4", ".webm", ".gif", ".mov")):
+            kind = "video"
+        elif "image" in mime or name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            kind = "photo"
+        else:
+            kind = "photo"
     else:
         await update.message.reply_text("Send a photo, GIF or video.")
         return
 
-    file = await tg_file.get_file()
-    local_path = media.tmp_path(os.path.splitext(file.file_path)[1] or ".bin")
-    await file.download_to_drive(local_path)
-    width, height, _ = media.probe_dimensions(local_path)
-    os.remove(local_path)
+    try:
+        file = await tg_file.get_file()
+    except Exception:
+        await update.message.reply_text("Could not get file. Please try again.")
+        return
+    try:
+        local_path = media.tmp_path(os.path.splitext(file.file_path or "")[1] or ".bin")
+        await file.download_to_drive(local_path)
+        width, height, _ = media.probe_dimensions(local_path)
+    except Exception:
+        width, height = 512, 512
+        try:
+            local_path = media.tmp_path(".bin")
+            await file.download_to_drive(local_path)
+            width, height, _ = media.probe_dimensions(local_path)
+        except Exception:
+            width, height = 512, 512
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
 
     job_id = uuid.uuid4().hex
     job = {
@@ -707,7 +744,13 @@ async def handle_emoji_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         state.add_user_pack(user_id, pack_name)
         state.bump_sticker_use(pack_name)
-        await query.edit_message_text("Sticker added.")
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        try:
+            s = await context.bot.get_sticker_set(pack_name)
+            count = len(s.stickers)
+        except BadRequest:
+            count = state.get_pack_uses(pack_name)
+        await query.edit_message_text(f"Sticker added to {display}. This pack now has {count} stickers.")
         await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
     except Exception as e:
         await context.bot.send_message(chat_id, "Could not create sticker. Please try again.")
@@ -909,7 +952,7 @@ def register_handlers(app: Application):
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(
-        filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.Document.ALL,
+        filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.Document.ALL | filters.Sticker.ALL,
         handle_media,
     ))
     app.add_handler(CallbackQueryHandler(handle_start_nav, pattern=r"^start:"))
