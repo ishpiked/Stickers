@@ -144,6 +144,78 @@ def get_stat(name: str) -> int:
     return int(val) if val else 0
 
 
+def bump_sticker_use(pack_name: str) -> None:
+    import datetime
+    bump_stat("stickers_created")
+    redis.incr(f"pack:uses:{pack_name}")
+    today = datetime.date.today().isoformat()
+    redis.incr(f"stats:daily:{today}")
+    redis.expire(f"stats:daily:{today}", 86400 * 8)
+    year, week, _ = datetime.date.today().isocalendar()
+    week_key = f"{year}-W{week:02d}"
+    redis.incr(f"stats:weekly:{week_key}")
+    redis.expire(f"stats:weekly:{week_key}", 86400 * 14)
+    redis.sadd(f"stats:daily:packs:{today}", pack_name)
+    redis.expire(f"stats:daily:packs:{today}", 86400 * 8)
+    redis.sadd(f"stats:weekly:packs:{week_key}", pack_name)
+    redis.expire(f"stats:weekly:packs:{week_key}", 86400 * 14)
+
+
+def get_pack_uses(pack_name: str) -> int:
+    val = redis.get(f"pack:uses:{pack_name}")
+    return int(val) if val else 0
+
+
+def get_most_used_pack(user_id: int | None = None) -> tuple[str, int] | None:
+    import datetime
+    candidates: list[str] = []
+    if user_id is not None:
+        candidates = list_user_packs(user_id)
+    else:
+        try:
+            for key in redis.scan_iter("pack:uses:*"):
+                pack = key.split("pack:uses:", 1)[-1]
+                candidates.append(pack)
+        except Exception:
+            candidates = []
+    best: tuple[str, int] | None = None
+    for p in candidates:
+        c = get_pack_uses(p)
+        if best is None or c > best[1]:
+            best = (p, c)
+    return best
+
+
+def get_today_uses() -> int:
+    import datetime
+    today = datetime.date.today().isoformat()
+    val = redis.get(f"stats:daily:{today}")
+    return int(val) if val else 0
+
+
+def get_week_uses() -> int:
+    import datetime
+    year, week, _ = datetime.date.today().isocalendar()
+    week_key = f"{year}-W{week:02d}"
+    val = redis.get(f"stats:weekly:{week_key}")
+    return int(val) if val else 0
+
+
+def get_today_packs_count() -> int:
+    import datetime
+    today = datetime.date.today().isoformat()
+    val = redis.scard(f"stats:daily:packs:{today}")
+    return int(val) if val else 0
+
+
+def get_week_packs_count() -> int:
+    import datetime
+    year, week, _ = datetime.date.today().isocalendar()
+    week_key = f"{year}-W{week:02d}"
+    val = redis.scard(f"stats:weekly:packs:{week_key}")
+    return int(val) if val else 0
+
+
 # ---------- known chats, for broadcast ----------
 
 def remember_chat(chat_id: int) -> None:

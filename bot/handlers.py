@@ -264,11 +264,30 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "stats":
         packs = state.list_user_packs(user_id)
         total = len(packs)
-        created = state.get_stat("stickers_created")
+        total_uses = state.get_stat("stickers_created")
+        today_uses = state.get_today_uses()
+        week_uses = state.get_week_uses()
+        today_packs = state.get_today_packs_count()
+        week_packs = state.get_week_packs_count()
+        most = state.get_most_used_pack(user_id)
+        if most:
+            most_display = most[0].split("_by_")[0].replace("_", " ") + f" : {most[1]} uses"
+        else:
+            most_display = "none"
         active = state.get_active_pack(user_id) or "none"
         if active != "none":
             active = active.split("_by_")[0].replace("_", " ")
-        text = f"Stats.\nPacks: {total}\nStickers created: {created}\nActive pack: {active}"
+        text = (
+            f"Stats.\n"
+            f"Packs: {total}\n"
+            f"Total stickers: {total_uses}\n"
+            f"Most used pack: {most_display}\n"
+            f"Packs used today: {today_packs}\n"
+            f"Stickers today: {today_uses}\n"
+            f"Packs used this week: {week_packs}\n"
+            f"Stickers this week: {week_uses}\n"
+            f"Active pack: {active}"
+        )
         try:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
@@ -365,7 +384,8 @@ async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         owner_id = state.get_pack_owner(pack_name)
         owner_text = str(owner_id) if owner_id else "unknown"
         is_hidden = state.is_pack_hidden(user_id, pack_name)
-        text = f"Pack stats.\nTitle: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nOwner: {owner_text}\nCoowners: {co_text}"
+        pack_uses = state.get_pack_uses(pack_name)
+        text = f"Pack stats.\nTitle: {title}\nStickers: {count}\nUses: {pack_uses}\nHidden: {'yes' if is_hidden else 'no'}\nOwner: {owner_text}\nCoowners: {co_text}"
         try:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
@@ -683,7 +703,7 @@ async def handle_emoji_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await context.bot.add_sticker_to_set(user_id=user_id, name=pack_name, sticker=sticker)
 
         state.add_user_pack(user_id, pack_name)
-        state.bump_stat("stickers_created")
+        state.bump_sticker_use(pack_name)
         await query.edit_message_text("Sticker added.")
         await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
     except Exception as e:
@@ -733,7 +753,26 @@ async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Stickers created: {state.get_stat('stickers_created')}")
+    total = state.get_stat("stickers_created")
+    today = state.get_today_uses()
+    week = state.get_week_uses()
+    today_packs = state.get_today_packs_count()
+    week_packs = state.get_week_packs_count()
+    most = state.get_most_used_pack()
+    if most:
+        most_display = most[0].split("_by_")[0].replace("_", " ") + f" : {most[1]} uses"
+    else:
+        most_display = "none"
+    await update.message.reply_text(
+        f"Stats.\n"
+        f"Total stickers: {total}\n"
+        f"Most used pack: {most_display}\n"
+        f"Packs used today: {today_packs}\n"
+        f"Stickers today: {today}\n"
+        f"Packs used this week: {week_packs}\n"
+        f"Stickers this week: {week}\n"
+        f"Chats: {len(state.list_chats())}"
+    )
 
 
 @admin_only
