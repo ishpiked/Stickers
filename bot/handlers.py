@@ -188,33 +188,33 @@ def _get_help_text(user_id: int) -> str:
     is_admin = user_id in ADMIN_IDS
     text = (
         "<b>Xtickerz Help</b>\n"
-        "<blockquote>Convert photos, GIFs and videos into Telegram stickers. Manage packs with simple buttons.</blockquote>\n\n"
+        "<blockquote>Turn any file into a sticker. Fast, simple, no editing.</blockquote>\n\n"
+        "<b>Quick Start</b>\n"
+        " 1. Tap Create to make a pack\n"
+        " 2. Choose a link for your pack\n"
+        " 3. Send a photo, GIF or video\n"
+        " 4. Your sticker is added instantly\n\n"
         "<b>Commands</b>\n"
-        " /start : view welcome message\n"
-        " /newpack [name] [link] : create a new pack\n"
-        " /mypacks : list your packs\n"
-        " /help : view this message\n"
-        " /cancel : cancel current action\n\n"
-        "<b>How to use</b>\n"
-        " 1. Tap Create or use /newpack\n"
-        " 2. Send link for the pack\n"
-        " 3. Send any file to add stickers\n"
-        " 4. Use My Packs to manage packs\n"
+        " /start : open the studio\n"
+        " /newpack [name] [link] : create a pack\n"
+        " /mypacks : view your packs\n"
+        " /help : show this help\n"
+        " /cancel : cancel any action\n"
     )
     if is_admin:
         text += (
             "\n<b>Admin</b>\n"
-            " /ban [id] : ban a user\n"
-            " /unban [id] : unban a user\n"
-            " /stats : view global stats\n"
-            " /health : check service status\n"
-            " /broadcast [text] : send to all chats\n"
+            " /ban [id] : ban user\n"
+            " /unban [id] : unban user\n"
+            " /stats : global stats\n"
+            " /health : service status\n"
+            " /broadcast [text] : message all chats\n"
             " /settings : view settings\n"
-            " /setstarttext [text] : update welcome text\n"
-            " /setstartimage : reply to photo to update image, use [none] to clear\n"
+            " /setstarttext [text] : update welcome\n"
+            " /setstartimage : update image, use [none] to clear\n"
             " /setforcesub [channel or off] : set force channel\n"
             " /setratelimit [n] : set hourly limit\n"
-            " /resetsettings : reset to defaults\n"
+            " /resetsettings : reset defaults\n"
         )
     return text
 
@@ -286,14 +286,14 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
     elif action == "create":
         state.set_awaiting(user_id, "create_pack")
-        text = "Send pack name."
+        text = "<b>New Pack</b>\n<blockquote>What should we call your new pack?</blockquote>"
         try:
             if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=help_keyboard())
             else:
-                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
         except BadRequest:
-            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
     elif action == "stats":
         packs = state.list_user_packs(user_id)
         total = len(packs)
@@ -312,15 +312,12 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active = active.split("_by_")[0].replace("_", " ")
         text = (
             f"<b>Stats</b>\n"
-            f"<blockquote>Your sticker activity overview</blockquote>\n"
-            f"Packs: {total}\n"
+            f"<blockquote>Your sticker packs at a glance</blockquote>\n"
+            f"Packs: {total} | Active: {active}\n"
             f"Total stickers: {total_uses}\n"
-            f"Most used pack: {most_display}\n"
-            f"Packs used today: {today_packs}\n"
-            f"Stickers today: {today_uses}\n"
-            f"Packs used this week: {week_packs}\n"
-            f"Stickers this week: {week_uses}\n"
-            f"Active pack: {active}"
+            f"Most used: {most_display}\n"
+            f"Today: {today_uses} stickers in {today_packs} packs\n"
+            f"This week: {week_uses} stickers in {week_packs} packs"
         )
         try:
             if query.message.photo:
@@ -355,13 +352,12 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         count = 0
         title = stored_title or pack_name.split("_by_")[0].replace("_", " ")
-    link = watermark or pack_name.split("_by_")[0] + "_by_xtickerz"
+    link = f"https://t.me/addstickers/{pack_name}"
     text = (
         f"<b>{title}</b>\n"
-        f"<blockquote>https://t.me/addstickers/{pack_name}</blockquote>\n"
-        f"Stickers: {count} | Hidden: {'yes' if is_hidden else 'no'}\n"
-        f"Watermark: {link}\n\n"
-        f"Send a photo, GIF or video to add stickers to this pack."
+        f"<blockquote>{link}</blockquote>\n"
+        f"{count} stickers | {'Hidden' if is_hidden else 'Visible'}\n\n"
+        f"Send any file to add to this pack."
     )
     try:
         if query.message.photo:
@@ -588,38 +584,38 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
             return True
         title = text.strip()
         if len(title) < 2 or len(title) > 50:
-            await update.message.reply_text("Pack name must be 2 to 50 characters.")
+            await update.message.reply_text("Pack name must be 2 to 50 characters.", parse_mode="HTML")
             return True
         state.set_awaiting(user_id, "create_pack_link", {"title": title})
-        await update.message.reply_text("Send link for this pack. Use only letters and numbers.")
+        await update.message.reply_text("<b>Choose a link</b>\n<blockquote>Use only letters and numbers. This will be part of your shareable link.</blockquote>", parse_mode="HTML")
         return True
     elif action == "create_pack_link":
         title = data.get("title")
         if not title:
             state.clear_awaiting(user_id)
-            await update.message.reply_text("Pack name missing. Start again.")
+            await update.message.reply_text("Pack name missing. Start again.", parse_mode="HTML")
             return True
         if not text:
-            await update.message.reply_text("Send a valid link.")
+            await update.message.reply_text("Send a valid link.", parse_mode="HTML")
             return True
         clean_link = text.strip().replace(" ", "")
         if not clean_link.isalnum():
-            await update.message.reply_text("Link must use only letters and numbers.")
+            await update.message.reply_text("Link must use only letters and numbers.", parse_mode="HTML")
             return True
         if not clean_link[0].isalpha():
-            await update.message.reply_text("Link must start with a letter.")
+            await update.message.reply_text("Link must start with a letter.", parse_mode="HTML")
             return True
         if len(clean_link) < 2 or len(clean_link) > 30:
-            await update.message.reply_text("Link must be 2 to 30 characters.")
+            await update.message.reply_text("Link must be 2 to 30 characters.", parse_mode="HTML")
             return True
         pack_name = f"{clean_link}_by_{BOT_USERNAME.lower()}"
         existing = [p.lower() for p in state.list_user_packs(user_id)]
         if pack_name.lower() in existing:
-            await update.message.reply_text("You already have a pack with this link.")
+            await update.message.reply_text("You already have a pack with this link.", parse_mode="HTML")
             return True
         try:
             await context.bot.get_sticker_set(pack_name)
-            await update.message.reply_text("This link is taken. Try another.")
+            await update.message.reply_text("This link is taken. Try another.", parse_mode="HTML")
             return True
         except BadRequest:
             pass
@@ -629,7 +625,7 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
         watermark = f"{clean_link}_by_xtickerz"
         state.set_pack_title(f"watermark:{pack_name}", watermark)
         state.clear_awaiting(user_id)
-        await update.message.reply_text(f"Pack created: {title}. Link is https://t.me/addstickers/{pack_name}. Now send media to add stickers.", reply_markup=pack_detail_keyboard(pack_name, False))
+        await update.message.reply_text(f"<b>Pack Created</b>\n<blockquote>{title}</blockquote>\nLink: https://t.me/addstickers/{pack_name}\n\nSend your first sticker to get started.", parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, False))
         await log(context.bot, f"Pack created {pack_name} titled {title} by user {user_id}")
         return True
     elif action == "rename_pack":
@@ -915,7 +911,7 @@ async def build_preview(chat_id, context, job_id, job, crop):
             if count == 0:
                 count = 1
         link = f"https://t.me/addstickers/{pack_name}"
-        await context.bot.send_message(chat_id, f"Sticker added to {display}. This pack now has {count} stickers.\n{link}", disable_web_page_preview=False)
+        await context.bot.send_message(chat_id, f"<b>Sticker Added</b>\n<blockquote>{display}</blockquote>\nThis pack now has {count} stickers.\n{link}", parse_mode="HTML", disable_web_page_preview=False)
         await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
     except BadRequest as e:
         err2 = str(e).lower()
