@@ -1,5 +1,10 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+try:
+    from bot import state as _state
+except Exception:
+    _state = None
+
 CROP_LABELS = {
     "left": "Left", "center": "Center", "right": "Right",
     "top": "Top", "middle": "Middle", "bottom": "Bottom",
@@ -61,7 +66,18 @@ def help_keyboard() -> InlineKeyboardMarkup:
 def packs_keyboard(packs: list[str]) -> InlineKeyboardMarkup:
     rows = []
     for pack in packs:
-        short = pack.split("_by_")[0].replace("_", " ")[:30]
+        title = None
+        if _state:
+            try:
+                title = _state.get_pack_title(pack)
+            except Exception:
+                title = None
+        if not title:
+            try:
+                title = pack.split("_by_")[0].replace("_", " ")
+            except Exception:
+                title = pack
+        short = title[:30]
         rows.append([InlineKeyboardButton(short or pack, callback_data=f"pack:view:{pack}")])
     rows.append([InlineKeyboardButton("Back", callback_data="help:back")])
     if not packs:

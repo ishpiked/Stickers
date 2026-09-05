@@ -47,6 +47,14 @@ def list_user_packs(user_id: int) -> list[str]:
     return list(redis.smembers(f"packs:{user_id}") or [])
 
 
+def set_pack_title(pack_name: str, title: str) -> None:
+    redis.set(f"pack:title:{pack_name}", title)
+
+
+def get_pack_title(pack_name: str) -> str | None:
+    return redis.get(f"pack:title:{pack_name}")
+
+
 def is_pack_hidden(user_id: int, pack_name: str) -> bool:
     return redis.sismember(f"hidden:{user_id}", pack_name) == 1
 

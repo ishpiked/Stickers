@@ -65,19 +65,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _blocked(update, context):
         return
-    if not context.args:
-        await update.message.reply_text("Use: /newpack [name]")
-        return
-    clean = "_".join(context.args).strip().lower()
-    pack_name = f"{clean}_by_{BOT_USERNAME.lower()}"
     user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Use: /newpack [name] [link]")
+        return
+    if len(context.args) == 1:
+        title = context.args[0]
+        state.set_awaiting(user_id, "create_pack_link", {"title": title})
+        await update.message.reply_text("Send link for this pack. Use only letters, numbers and underscores.")
+        return
+    *title_parts, link = context.args
+    title = " ".join(title_parts)
+    clean_link = link.strip().lower().replace(" ", "")
+    if not clean_link.isalnum():
+        await update.message.reply_text("Link must use only letters and numbers.")
+        return
+    if len(clean_link) < 2 or len(clean_link) > 30:
+        await update.message.reply_text("Link must be 2 to 30 characters.")
+        return
+    pack_name = f"{clean_link}_by_{BOT_USERNAME.lower()}"
+    if pack_name in state.list_user_packs(user_id):
+        await update.message.reply_text("You already have a pack with this link.")
+        return
     state.set_active_pack(user_id, pack_name)
     state.add_user_pack(user_id, pack_name)
-    display = pack_name.split("_by_")[0].replace("_", " ")
+    state.set_pack_title(pack_name, title)
     await update.message.reply_text(
-        f"Pack set to {display}. Now send a photo, GIF or video."
+        f"Pack set to {title}. Link is {clean_link}. Now send a photo, GIF or video."
     )
-    await log(context.bot, f"New pack {pack_name} by user {user_id}")
+    await log(context.bot, f"New pack {pack_name} titled {title} by user {user_id}")
 
 
 async def mypacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,11 +109,11 @@ async def mypacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in visible:
         try:
             s = await context.bot.get_sticker_set(p)
-            display = p.split("_by_")[0].replace("_", " ")
-            lines.append(f"{display} : {len(s.stickers)}/120")
+            title = state.get_pack_title(p) or s.title
+            lines.append(f"{title} : {len(s.stickers)}/120")
         except BadRequest:
-            display = p.split("_by_")[0].replace("_", " ")
-            lines.append(f"{display} : gone")
+            title = state.get_pack_title(p) or p.split("_by_")[0].replace("_", " ")
+            lines.append(f"{title} : gone")
     await update.message.reply_text("Your packs:\n" + "\n".join(lines) + "\n\nUse /usepack [name] to switch.")
 
 
@@ -256,7 +272,7 @@ async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
     elif action == "create":
         state.set_awaiting(user_id, "create_pack")
-        text = "Send pack name for new pack. Use only letters and numbers."
+        text = "Send pack name."
         try:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
@@ -315,14 +331,16 @@ async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.set_active_pack(user_id, pack_name)
     state.add_user_pack(user_id, pack_name)
     is_hidden = state.is_pack_hidden(user_id, pack_name)
+    stored_title = state.get_pack_title(pack_name)
     try:
         s = await context.bot.get_sticker_set(pack_name)
         count = len(s.stickers)
-        title = s.title
+        title = stored_title or s.title
     except BadRequest:
         count = 0
-        title = pack_name.split("_by_")[0].replace("_", " ")
-    text = f"Pack: {title}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nSend a photo, GIF or video to add stickers to this pack."
+        title = stored_title or pack_name.split("_by_")[0].replace("_", " ")
+    link = pack_name.split("_by_")[0]
+    text = f"Pack: {title}\nLink: {link}\nStickers: {count}\nHidden: {'yes' if is_hidden else 'no'}\nSend a photo, GIF or video to add stickers to this pack."
     try:
         if query.message.photo:
             await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
@@ -443,23 +461,45 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
         if not text:
             await update.message.reply_text("Send a valid pack name.")
             return True
-        clean = text.strip().lower().replace(" ", "_")
-        if not clean.replace("_", "").isalnum():
-            await update.message.reply_text("Pack name must use only letters and numbers.")
+        title = text.strip()
+        if len(title) < 2 or len(title) > 50:
+            await update.message.reply_text("Pack name must be 2 to 50 characters.")
             return True
-        if len(clean) < 2 or len(clean) > 30:
-            await update.message.reply_text("Pack name must be 2 to 30 characters.")
+        state.set_awaiting(user_id, "create_pack_link", {"title": title})
+        await update.message.reply_text("Send link for this pack. Use only letters and numbers.")
+        return True
+    elif action == "create_pack_link":
+        title = data.get("title")
+        if not title:
+            state.clear_awaiting(user_id)
+            await update.message.reply_text("Pack name missing. Start again.")
             return True
-        pack_name = f"{clean}_by_{BOT_USERNAME.lower()}"
+        if not text:
+            await update.message.reply_text("Send a valid link.")
+            return True
+        clean_link = text.strip().lower().replace(" ", "")
+        if not clean_link.isalnum():
+            await update.message.reply_text("Link must use only letters and numbers.")
+            return True
+        if len(clean_link) < 2 or len(clean_link) > 30:
+            await update.message.reply_text("Link must be 2 to 30 characters.")
+            return True
+        pack_name = f"{clean_link}_by_{BOT_USERNAME.lower()}"
         if pack_name in state.list_user_packs(user_id):
-            await update.message.reply_text("You already have a pack with this name.")
+            await update.message.reply_text("You already have a pack with this link.")
             return True
+        try:
+            await context.bot.get_sticker_set(pack_name)
+            await update.message.reply_text("This link is taken. Try another.")
+            return True
+        except BadRequest:
+            pass
         state.set_active_pack(user_id, pack_name)
         state.add_user_pack(user_id, pack_name)
+        state.set_pack_title(pack_name, title)
         state.clear_awaiting(user_id)
-        display = pack_name.split("_by_")[0].replace("_", " ")
-        await update.message.reply_text(f"Pack created: {display}. It is now active. Send media to add stickers.", reply_markup=pack_detail_keyboard(pack_name, False))
-        await log(context.bot, f"Pack created {pack_name} by user {user_id}")
+        await update.message.reply_text(f"Pack created: {title}. Link is {clean_link}. It is now active. Send media to add stickers.", reply_markup=pack_detail_keyboard(pack_name, False))
+        await log(context.bot, f"Pack created {pack_name} titled {title} by user {user_id}")
         return True
     elif action == "rename_pack":
         pack_name = data.get("pack")
@@ -468,6 +508,7 @@ async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYP
             return True
         try:
             await context.bot.set_sticker_set_title(name=pack_name, title=text)
+            state.set_pack_title(pack_name, text)
             state.clear_awaiting(user_id)
             await update.message.reply_text("Pack renamed.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
         except BadRequest as e:
@@ -554,6 +595,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active_pack = f"{clean}_by_{BOT_USERNAME.lower()}"
             state.set_active_pack(user_id, active_pack)
             state.add_user_pack(user_id, active_pack)
+            state.set_pack_title(active_pack, clean.replace("_", " "))
             display = clean.replace("_", " ")
             await update.message.reply_text(f"New pack created: {display}. Adding sticker there.")
     msg = update.message
@@ -675,10 +717,11 @@ async def build_preview(chat_id, context, job_id, job, crop):
         with open(out_path, "rb") as f:
             emoji = random.choice(RANDOM_EMOJIS)
             sticker = InputSticker(sticker=f, format=sticker_format, emoji_list=[emoji])
+            title = state.get_pack_title(pack_name) or pack_name.split("_by_")[0].replace("_", " ")
             try:
                 await context.bot.create_new_sticker_set(
                     user_id=user_id, name=pack_name,
-                    title=pack_name.split("_by_")[0].replace("_", " "),
+                    title=title,
                     stickers=[sticker],
                 )
             except BadRequest as e:
@@ -699,7 +742,8 @@ async def build_preview(chat_id, context, job_id, job, crop):
                         raise
         state.add_user_pack(user_id, pack_name)
         state.bump_sticker_use(pack_name)
-        display = pack_name.split("_by_")[0].replace("_", " ")
+        stored = state.get_pack_title(pack_name)
+        display = stored or pack_name.split("_by_")[0].replace("_", " ")
         try:
             s = await context.bot.get_sticker_set(pack_name)
             count = len(s.stickers)
