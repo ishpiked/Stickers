@@ -24,19 +24,27 @@ CLOVER_ART = (
     "⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⢤⠤⢤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
     "⠀⠀⠀⠀⠀⣀⣀⣀⡜⠻⠿⢾⣷⠹⠀⠀⠀⠀⣀⣤⣤⡀⠀⠀⠀⠀\n"
     "⠀⠀⠀⢠⡎⠁⠀⠀⠃⠀⠀⠀⠉⠀⠀⠀⡠⠞⠛⠛⠻⢽⠀⠀⠀⠀\n"
-    "⠀⠀⠀⠸⣷⡀⠀⢀⠀⢂⠀⡀⠀⠀⠀⠜⠀⠀⠀⠀⡀⠸⠀⠤⢄⠀\n"
-    "⠀⠀⠀⠀⠙⣗⣄⠀⠠⡀⢢⠃⠀⢸⠌⠀⡠⢊⠀⠊⠀⠀⠀⠀⠀⡇\n"
-    "⠀⠀⠀⣀⣀⣈⣲⣕⣦⡈⠢⣻⡀⡎⢀⣴⡢⠑⠂⠁⠀⠀⠀⠀⡠⠃\n"
+    "⠀⠀⠀⠸⣷⡀⠀⢀⠀⢂⠀⡀⠀⠀⠀⠜⠀⠀⠀⠀⠀⡀⠸⠀⠤⢄⠀\n"
+    "⠀⠀⠀⠀⠙⣗⣄⠀⠠⡀⢢⠃⠀⢸⠌⠀⡠⢊⠀⠊⠀⠀⠀⠀⠀⠀⡇\n"
+    "⠀⠀⠀⣀⣀⣈⣲⣕⣦⡈⠢⣻⡀⡎⢀⣴⡢⠑⠂⠁⠀⠀⠀⠀⠀⡠⠃\n"
     "⠀⣴⠿⠽⠏⠀⠀⠀⠈⠉⢒⣺⣷⣗⣉⣁⣀⣀⣀⠀⠠⠤⠐⠈⠀⠀\n"
     "⢸⠀⠀⠀⠀⠀⠀⠀⢀⠠⡖⠁⣿⢳⡬⡁⠒⠒⠤⢄⡀⠀⠀⠀⠀⠀\n"
     "⠈⢦⡀⠀⠀⡀⠄⠂⠁⠊⠀⢰⣯⡏⠎⢌⠑⠀⠀⠀⠈⠑⢄⠀⠀⠀\n"
-    "⠀⠀⠉⡻⠀⠀⠀⠀⠀⠀⣲⡟⡟⠀⠀⠀⠢⡀⠀⠀⠀⠀⢸⠀⠀⠀\n"
+    "⠀⠀⠉⡻⠀⠀⠀⠀⠀⠀⣲⡟⡟⠀⠀⠀⠀⠢⡀⠀⠀⠀⠀⢸⠀⠀⠀\n"
     "⠀⠀⠀⢧⣤⡄⡀⠀⢀⡔⣽⠃⢧⡄⠀⠀⠀⠰⣀⠀⠀⣀⠞⠀⠀⠀\n"
     "⠀⠀⠀⠈⠳⠬⠥⠔⠋⡜⡌⠀⠘⣿⣦⣀⠀⡀⡇⠉⠉⠀⠀⠀⠀⠀\n"
     "⠀⠀⠀⠀⠀⠀⠀⢀⠜⡰⠀⠀⠀⠈⠛⠯⠥⠒⠁⠀⠀⠀⠀⠀⠀⠀\n"
     "⠀⠀⠀⠀⠀⠀⡠⠊⡜⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
     "⠀⠀⠀⠀⠀⠀⣛⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
 )
+
+
+def admin_only(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id not in ADMIN_IDS:
+            return
+        await func(update, context)
+    return wrapper
 
 
 async def feedback_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1188,14 +1196,6 @@ def _cleanup_out_path(job: dict):
 
 
 # ---------- admin ----------
-
-def admin_only(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id not in ADMIN_IDS:
-            return
-        await func(update, context)
-    return wrapper
-
 
 @admin_only
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
