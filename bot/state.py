@@ -1,0 +1,356 @@
+"""
+Redis-backed state. Nothing here holds media -- only pointers, settings,
+and small counters. Jobs are addressed by a uuid that follows the media
+through crop -> preview -> emoji -> upload, refreshed with a TTL at each
+stage rather than kept forever.
+"""
+import json
+import time
+from upstash_redis import Redis
+from bot.config import (
+    UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN,
+    PENDING_JOB_TTL, DEFAULT_SETTINGS,
+)
+
+redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
+
+
+# ---------- multi-stage sticker jobs ----------
+
+def save_job(job_id: str, data: dict, ttl: int = PENDING_JOB_TTL) -> None:
+    redis.set(f"job:{job_id}", json.dumps(data), ex=ttl)
+
+
+def get_job(job_id: str) -> dict | None:
+    raw = redis.get(f"job:{job_id}")
+    return json.loads(raw) if raw else None
+
+
+def clear_job(job_id: str) -> None:
+    redis.delete(f"job:{job_id}")
+
+
+# ---------- packs ----------
+
+def set_active_pack(user_id: int, pack_name: str) -> None:
+    redis.set(f"pack:{user_id}", pack_name, ex=3600)
+
+
+def get_active_pack(user_id: int) -> str | None:
+    return redis.get(f"pack:{user_id}")
+
+
+def add_user_pack(user_id: int, pack_name: str) -> None:
+    redis.sadd(f"packs:{user_id}", pack_name)
+
+
+def list_user_packs(user_id: int) -> list[str]:
+    return list(redis.smembers(f"packs:{user_id}") or [])
+
+
+def set_pack_title(pack_name: str, title: str) -> None:
+    redis.set(f"pack:title:{pack_name}", title)
+
+
+def get_pack_title(pack_name: str) -> str | None:
+    return redis.get(f"pack:title:{pack_name}")
+
+
+def is_pack_hidden(user_id: int, pack_name: str) -> bool:
+    return redis.sismember(f"hidden:{user_id}", pack_name) == 1
+
+
+def hide_pack(user_id: int, pack_name: str) -> None:
+    redis.sadd(f"hidden:{user_id}", pack_name)
+
+
+def show_pack(user_id: int, pack_name: str) -> None:
+    redis.srem(f"hidden:{user_id}", pack_name)
+
+
+def delete_user_pack(user_id: int, pack_name: str) -> None:
+    redis.srem(f"packs:{user_id}", pack_name)
+    redis.srem(f"hidden:{user_id}", pack_name)
+    redis.srem(f"coowners:{pack_name}", str(user_id))
+    if get_active_pack(user_id) == pack_name:
+        redis.delete(f"pack:{user_id}")
+    # Clear title if no one else owns it
+    try:
+        owner = get_pack_owner(pack_name)
+        if not owner:
+            redis.delete(f"pack:title:{pack_name}")
+            redis.delete(f"pack:uses:{pack_name}")
+            redis.delete(f"coowners:{pack_name}")
+    except Exception:
+        pass
+
+
+def list_visible_packs(user_id: int) -> list[str]:
+    all_packs = list_user_packs(user_id)
+    return [p for p in all_packs if not is_pack_hidden(user_id, p)]
+
+
+# ---------- coownership ----------
+
+def add_coowner(pack_name: str, user_id: int) -> None:
+    redis.sadd(f"coowners:{pack_name}", str(user_id))
+    redis.sadd(f"packs:{user_id}", pack_name)
+    redis.srem(f"hidden:{user_id}", pack_name)
+
+
+def remove_coowner(pack_name: str, user_id: int) -> None:
+    redis.srem(f"coowners:{pack_name}", str(user_id))
+
+
+def list_coowners(pack_name: str) -> list[int]:
+    members = redis.smembers(f"coowners:{pack_name}") or []
+    return [int(x) for x in members]
+
+
+def is_owner_or_coowner(user_id: int, pack_name: str) -> bool:
+    if pack_name in list_user_packs(user_id):
+        return True
+    return redis.sismember(f"coowners:{pack_name}", str(user_id)) == 1
+
+
+def is_original_owner(user_id: int, pack_name: str) -> bool:
+    return pack_name in list_user_packs(user_id)
+
+
+def get_pack_owner(pack_name: str) -> int | None:
+    prefix = f"packs:"
+    for key in redis.scan_iter(f"{prefix}*"):
+        members = redis.smembers(key)
+        if pack_name in members:
+            try:
+                return int(key.split(":")[-1])
+            except (ValueError, IndexError):
+                pass
+    return None
+
+
+# ---------- awaiting actions for button flows ----------
+
+def set_awaiting(user_id: int, action: str, data: dict | None = None) -> None:
+    payload = {"action": action, "data": data or {}}
+    redis.set(f"await:{user_id}", json.dumps(payload), ex=600)
+
+
+def get_awaiting(user_id: int) -> dict | None:
+    raw = redis.get(f"await:{user_id}")
+    return json.loads(raw) if raw else None
+
+
+def clear_awaiting(user_id: int) -> None:
+    redis.delete(f"await:{user_id}")
+
+
+# ---------- bans ----------
+
+def is_banned(user_id: int) -> bool:
+    return redis.exists(f"ban:{user_id}") == 1
+
+
+def ban_user(user_id: int) -> None:
+    redis.set(f"ban:{user_id}", "1")
+
+
+def unban_user(user_id: int) -> None:
+    redis.delete(f"ban:{user_id}")
+
+
+# ---------- stats ----------
+
+def bump_stat(name: str) -> None:
+    redis.incr(f"stats:{name}")
+
+
+def get_stat(name: str) -> int:
+    val = redis.get(f"stats:{name}")
+    return int(val) if val else 0
+
+
+def bump_sticker_use(pack_name: str) -> None:
+    import datetime
+    bump_stat("stickers_created")
+    redis.incr(f"pack:uses:{pack_name}")
+    today = datetime.date.today().isoformat()
+    redis.incr(f"stats:daily:{today}")
+    redis.expire(f"stats:daily:{today}", 86400 * 8)
+    year, week, _ = datetime.date.today().isocalendar()
+    week_key = f"{year}-W{week:02d}"
+    redis.incr(f"stats:weekly:{week_key}")
+    redis.expire(f"stats:weekly:{week_key}", 86400 * 14)
+    redis.sadd(f"stats:daily:packs:{today}", pack_name)
+    redis.expire(f"stats:daily:packs:{today}", 86400 * 8)
+    redis.sadd(f"stats:weekly:packs:{week_key}", pack_name)
+    redis.expire(f"stats:weekly:packs:{week_key}", 86400 * 14)
+
+
+def get_pack_uses(pack_name: str) -> int:
+    val = redis.get(f"pack:uses:{pack_name}")
+    return int(val) if val else 0
+
+
+def get_most_used_pack(user_id: int | None = None) -> tuple[str, int] | None:
+    import datetime
+    candidates: list[str] = []
+    if user_id is not None:
+        candidates = list_user_packs(user_id)
+    else:
+        try:
+            for key in redis.scan_iter("pack:uses:*"):
+                pack = key.split("pack:uses:", 1)[-1]
+                candidates.append(pack)
+        except Exception:
+            candidates = []
+    best: tuple[str, int] | None = None
+    for p in candidates:
+        c = get_pack_uses(p)
+        if best is None or c > best[1]:
+            best = (p, c)
+    return best
+
+
+def get_today_uses() -> int:
+    import datetime
+    today = datetime.date.today().isoformat()
+    val = redis.get(f"stats:daily:{today}")
+    return int(val) if val else 0
+
+
+def get_week_uses() -> int:
+    import datetime
+    year, week, _ = datetime.date.today().isocalendar()
+    week_key = f"{year}-W{week:02d}"
+    val = redis.get(f"stats:weekly:{week_key}")
+    return int(val) if val else 0
+
+
+def get_today_packs_count() -> int:
+    import datetime
+    today = datetime.date.today().isoformat()
+    val = redis.scard(f"stats:daily:packs:{today}")
+    return int(val) if val else 0
+
+
+def get_week_packs_count() -> int:
+    import datetime
+    year, week, _ = datetime.date.today().isocalendar()
+    week_key = f"{year}-W{week:02d}"
+    val = redis.scard(f"stats:weekly:packs:{week_key}")
+    return int(val) if val else 0
+
+
+# ---------- duplicate file handling ----------
+
+def is_duplicate_file(pack_name: str, file_unique_id: str) -> bool:
+    return redis.sismember(f"pack:files:{pack_name}", file_unique_id) == 1
+
+
+def add_file_to_pack(pack_name: str, file_unique_id: str, sticker_file_id: str) -> None:
+    redis.sadd(f"pack:files:{pack_name}", file_unique_id)
+    redis.hset(f"pack:filemap:{pack_name}", file_unique_id, sticker_file_id)
+
+
+def get_file_sticker(pack_name: str, file_unique_id: str) -> str | None:
+    return redis.hget(f"pack:filemap:{pack_name}", file_unique_id)
+
+
+def remove_file_from_pack(pack_name: str, file_unique_id: str) -> None:
+    redis.srem(f"pack:files:{pack_name}", file_unique_id)
+    redis.hdel(f"pack:filemap:{pack_name}", file_unique_id)
+
+
+# ---------- known chats, for broadcast ----------
+
+def remember_chat(chat_id: int) -> None:
+    redis.sadd("known_chats", str(chat_id))
+
+
+def list_chats() -> list[int]:
+    return [int(c) for c in (redis.smembers("known_chats") or [])]
+
+
+# ---------- rate limiting ----------
+
+def check_rate_limit(user_id: int) -> bool:
+    """Returns True if the user is still under their cap for the current window."""
+    settings = get_settings()
+    limit = int(settings["rate_limit_per_hour"])
+    window = int(settings.get("rate_limit_window_seconds", 600))
+    key = f"rl:{user_id}"
+    count = redis.incr(key)
+    if count == 1:
+        redis.expire(key, window)
+    return count <= limit
+
+
+# ---------- feedback ----------
+
+def save_feedback(user_id: int, rating: int, comment: str) -> None:
+    entry = json.dumps({"user_id": user_id, "rating": rating, "comment": comment, "ts": int(time.time())})
+    redis.lpush("feedback:list", entry)
+    redis.ltrim("feedback:list", 0, 199)
+    redis.incr("feedback:count")
+    redis.incrby("feedback:sum", rating)
+
+
+def get_feedback_summary() -> tuple[int, float]:
+    count = int(redis.get("feedback:count") or 0)
+    total = int(redis.get("feedback:sum") or 0)
+    return count, (total / count if count else 0.0)
+
+
+def get_recent_feedback(limit: int = 5) -> list[dict]:
+    raw = redis.lrange("feedback:list", 0, limit - 1) or []
+    return [json.loads(r) for r in raw]
+
+
+# ---------- per-user sticker shape + background removal ----------
+
+def get_user_shape(user_id: int) -> str:
+    return redis.get(f"shape:{user_id}") or "square"
+
+
+def set_user_shape(user_id: int, shape: str) -> None:
+    redis.set(f"shape:{user_id}", shape)
+
+
+def get_bg_removal(user_id: int) -> bool:
+    return redis.exists(f"bgremove:{user_id}") == 1
+
+
+def set_bg_removal(user_id: int, enabled: bool) -> None:
+    if enabled:
+        redis.set(f"bgremove:{user_id}", "1")
+    else:
+        redis.delete(f"bgremove:{user_id}")
+
+
+def get_auto_add(user_id: int) -> bool:
+    # default True: matches the current no-preview behavior unless a user opts out
+    val = redis.get(f"autoadd:{user_id}")
+    return val != "0"
+
+
+def set_auto_add(user_id: int, enabled: bool) -> None:
+    redis.set(f"autoadd:{user_id}", "1" if enabled else "0")
+
+
+# ---------- admin-editable settings ----------
+
+def get_settings() -> dict:
+    raw = redis.get("settings:global")
+    stored = json.loads(raw) if raw else {}
+    return {**DEFAULT_SETTINGS, **stored}
+
+
+def set_setting(key: str, value: str) -> None:
+    data = get_settings()
+    data[key] = value
+    redis.set("settings:global", json.dumps(data))
+
+
+def reset_settings() -> None:
+    redis.delete("settings:global")

@@ -1,0 +1,1404 @@
+import os
+import uuid
+import traceback
+import random
+import logging
+
+from telegram import Update, InputSticker, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, Forbidden
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    PreCheckoutQueryHandler, ContextTypes, filters,
+)
+
+from bot.config import BOT_USERNAME, ADMIN_IDS, MAX_STATIC_BYTES, MAX_VIDEO_BYTES
+from bot.keyboards import crop_choice_keyboard, preview_keyboard, emoji_keyboard, subscribe_keyboard, start_keyboard, help_keyboard, packs_keyboard, pack_detail_keyboard, delete_confirm_keyboard, duplicate_keyboard, settings_keyboard, feedback_rating_keyboard
+from bot import state, media
+from bot.logger import log
+from bot.subscription import is_subscribed
+
+RANDOM_EMOJIS = ["😀", "😂", "😍", "🔥", "💀", "🎉"]
+STAR_OPTIONS = [1, 5, 10, 25, 50, 100]
+CLOVER = "☘︎"
+CLOVER_ART = (
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⢤⠤⢤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
+    "⠀⠀⠀⠀⠀⣀⣀⣀⡜⠻⠿⢾⣷⠹⠀⠀⠀⠀⣀⣤⣤⡀⠀⠀⠀⠀\n"
+    "⠀⠀⠀⢠⡎⠁⠀⠀⠃⠀⠀⠀⠉⠀⠀⠀⡠⠞⠛⠛⠻⢽⠀⠀⠀⠀\n"
+    "⠀⠀⠀⠸⣷⡀⠀⢀⠀⢂⠀⡀⠀⠀⠀⠜⠀⠀⠀⠀⡀⠸⠀⠤⢄⠀\n"
+    "⠀⠀⠀⠀⠙⣗⣄⠀⠠⡀⢢⠃⠀⢸⠌⠀⡠⢊⠀⠊⠀⠀⠀⠀⠀⡇\n"
+    "⠀⠀⠀⣀⣀⣈⣲⣕⣦⡈⠢⣻⡀⡎⢀⣴⡢⠑⠂⠁⠀⠀⠀⠀⡠⠃\n"
+    "⠀⣴⠿⠽⠏⠀⠀⠀⠈⠉⢒⣺⣷⣗⣉⣁⣀⣀⣀⠀⠠⠤⠐⠈⠀⠀\n"
+    "⢸⠀⠀⠀⠀⠀⠀⠀⢀⠠⡖⠁⣿⢳⡬⡁⠒⠒⠤⢄⡀⠀⠀⠀⠀⠀\n"
+    "⠈⢦⡀⠀⠀⡀⠄⠂⠁⠊⠀⢰⣯⡏⠎⢌⠑⠀⠀⠀⠈⠑⢄⠀⠀⠀\n"
+    "⠀⠀⠉⡻⠀⠀⠀⠀⠀⠀⣲⡟⡟⠀⠀⠀⠢⡀⠀⠀⠀⠀⢸⠀⠀⠀\n"
+    "⠀⠀⠀⢧⣤⡄⡀⠀⢀⡔⣽⠃⢧⡄⠀⠀⠀⠰⣀⠀⠀⣀⠞⠀⠀⠀\n"
+    "⠀⠀⠀⠈⠳⠬⠥⠔⠋⡜⡌⠀⠘⣿⣦⣀⠀⡀⡇⠉⠉⠀⠀⠀⠀⠀\n"
+    "⠀⠀⠀⠀⠀⠀⠀⢀⠜⡰⠀⠀⠀⠈⠛⠯⠥⠒⠁⠀⠀⠀⠀⠀⠀⠀\n"
+    "⠀⠀⠀⠀⠀⠀⡠⠊⡜⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
+    "⠀⠀⠀⠀⠀⠀⣛⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+)
+
+
+async def feedback_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    text = f"<pre>{CLOVER_ART}</pre>\nRate this bot, {CLOVER} to {CLOVER * 5}:"
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=feedback_rating_keyboard())
+
+
+async def handle_feedback_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    rating = int(query.data.split(":", 1)[1])
+    user_id = query.from_user.id
+    state.set_awaiting(user_id, "feedback_text", {"rating": rating})
+    await query.edit_message_text(f"{CLOVER * rating} -- got it. Add a comment, or /skip.")
+
+
+async def skip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    awaiting = state.get_awaiting(user_id)
+    if awaiting and awaiting.get("action") == "feedback_text":
+        rating = awaiting.get("data", {}).get("rating", 0)
+        state.save_feedback(user_id, rating, "")
+        state.clear_awaiting(user_id)
+        await update.message.reply_text(f"Logged. {CLOVER * rating} noted -- thanks for the read.")
+        await log(context.bot, f"Feedback: {rating}/5 clovers from user {user_id} -- (no comment)")
+        return
+    await update.message.reply_text("Nothing to skip.")
+
+
+@admin_only
+async def feedbackstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    count, avg = state.get_feedback_summary()
+    if not count:
+        await update.message.reply_text("No feedback yet.")
+        return
+    rounded = max(1, round(avg))
+    lines = [f"{count} responses, average {avg:.1f} ({CLOVER * rounded})", ""]
+    for r in state.get_recent_feedback(5):
+        comment = r["comment"] or "(no comment)"
+        lines.append(f"{CLOVER * r['rating']} -- {comment}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def appreciate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    rows = [
+        [InlineKeyboardButton(f"{n} Stars", callback_data=f"donate:{n}") for n in STAR_OPTIONS[i:i + 3]]
+        for i in range(0, len(STAR_OPTIONS), 3)
+    ]
+    await update.message.reply_text(
+        "If this bot's been useful, a few Stars keep it running. Pick an amount:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def handle_donate_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    amount = int(query.data.split(":", 1)[1])
+    await context.bot.send_invoice(
+        chat_id=query.message.chat_id,
+        title="Support Xtickerz",
+        description=f"Send {amount} Telegram Stars to support the bot. Appreciated either way.",
+        payload=f"donate_{amount}_{query.from_user.id}",
+        provider_token="",  # empty for Telegram Stars payments
+        currency="XTR",
+        prices=[LabeledPrice("Support", amount)],
+    )
+
+
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+
+async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    user_id = update.effective_user.id
+    await update.message.reply_text("Got it. Thank you, genuinely.")
+    await log(context.bot, f"Donation received: {payment.total_amount} Stars from user {user_id}")
+
+
+# ---------- gates shared by user facing handlers ----------
+
+async def _blocked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user_id = update.effective_user.id
+
+    if state.is_banned(user_id):
+        return True
+
+    if not await is_subscribed(context.bot, user_id):
+        channel = state.get_settings()["force_sub_channel"]
+        clean = channel.lstrip("@")
+        await update.effective_message.reply_text(
+            f"Join {clean} to continue. Tap below to verify.",
+            reply_markup=subscribe_keyboard(channel),
+        )
+        return True
+
+    return False
+
+
+async def checksub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    if await is_subscribed(context.bot, user_id):
+        await query.answer("Verified")
+        await query.edit_message_text("Verified. Send a photo, GIF, or video and I'll get to work ◝(ᵔᗜᵔ)◜")
+    else:
+        await query.answer("Not verified yet. Please try again.", show_alert=True)
+
+
+# ---------- user commands ----------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state.remember_chat(update.effective_chat.id)
+    if await _blocked(update, context):
+        return
+    settings = state.get_settings()
+    if settings["start_image"]:
+        await update.message.reply_photo(settings["start_image"], caption=settings["start_text"], parse_mode="HTML", reply_markup=start_keyboard())
+    else:
+        await update.message.reply_text(settings["start_text"], parse_mode="HTML", reply_markup=start_keyboard())
+
+
+async def newpack(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Use: /newpack [name] [link]")
+        return
+    if len(context.args) == 1:
+        title = context.args[0]
+        state.set_awaiting(user_id, "create_pack_link", {"title": title})
+        await update.message.reply_text("Send link for this pack. Use only letters, numbers and underscores.")
+        return
+    *title_parts, link = context.args
+    title = " ".join(title_parts)
+    clean_link = link.strip().replace(" ", "")
+    if not clean_link.isalnum():
+        await update.message.reply_text("Link's gotta be letters and numbers only. Try again.")
+        return
+    if not clean_link[0].isalpha():
+        await update.message.reply_text("Link needs to start with a letter.")
+        return
+    if len(clean_link) < 2 or len(clean_link) > 30:
+        await update.message.reply_text("Keep the link between 2 and 30 characters.")
+        return
+    pack_name = f"{clean_link}_by_{BOT_USERNAME.lower()}"
+    # Check for existing link case insensitive
+    existing = [p.lower() for p in state.list_user_packs(user_id)]
+    if pack_name.lower() in existing:
+        await update.message.reply_text("You already own a pack with that link. Pick another.")
+        return
+    try:
+        await context.bot.get_sticker_set(pack_name)
+        await update.message.reply_text("That link's taken. Try another.")
+        return
+    except BadRequest:
+        pass
+    state.set_active_pack(user_id, pack_name)
+    state.add_user_pack(user_id, pack_name)
+    state.set_pack_title(pack_name, title)
+    watermark_link = f"{clean_link}_by_xtickerz"
+    state.set_pack_title(f"watermark:{pack_name}", watermark_link)
+    await update.message.reply_text(
+        f"Pack set to {title}. Link is https://t.me/addstickers/{pack_name}. Now send a photo, GIF or video."
+    )
+    await log(context.bot, f"New pack {pack_name} titled {title} by user {user_id}")
+
+
+async def mypacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    user_id = update.effective_user.id
+    packs = state.list_user_packs(user_id)
+    visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+    if not visible:
+        await update.message.reply_text("<b>No packs yet</b>\n<blockquote>Tap Create and I'll build you one.</blockquote>", parse_mode="HTML")
+        return
+    lines = []
+    for p in visible:
+        try:
+            s = await context.bot.get_sticker_set(p)
+            title = state.get_pack_title(p) or s.title
+            lines.append(f"<b>{title}</b> : {len(s.stickers)}/120")
+        except BadRequest:
+            title = state.get_pack_title(p) or p.split("_by_")[0].replace("_", " ")
+            lines.append(f"<b>{title}</b> : gone")
+    await update.message.reply_text("<b>Your Packs</b>\n<blockquote>Tap one to manage it.</blockquote>\n" + "\n".join(lines), parse_mode="HTML")
+
+
+async def usepack(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text("Use: /usepack [name]")
+        return
+    pack_name = context.args[0]
+    user_id = update.effective_user.id
+    if pack_name not in state.list_user_packs(user_id) and not state.is_owner_or_coowner(user_id, pack_name):
+        await update.message.reply_text("That pack's not on your list.")
+        return
+    state.set_active_pack(user_id, pack_name)
+    display = pack_name.split("_by_")[0].replace("_", " ")
+    await update.message.reply_text(f"Active pack: {display}. Send something.")
+
+
+async def renamepack(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Use: /renamepack [name] [new title]")
+        return
+    pack_name, new_title = context.args[0], " ".join(context.args[1:])
+    user_id = update.effective_user.id
+    if pack_name not in state.list_user_packs(user_id) and not state.is_owner_or_coowner(user_id, pack_name):
+        await update.message.reply_text("That one's not yours.")
+        return
+    try:
+        await context.bot.set_sticker_set_title(name=pack_name, title=new_title)
+        await update.message.reply_text("Renamed. Done.")
+    except BadRequest as e:
+        await update.message.reply_text(f"Couldn't rename it: {e}")
+
+
+async def removesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await _blocked(update, context):
+        return
+    replied = update.message.reply_to_message
+    if not replied or not replied.sticker:
+        await update.message.reply_text("Reply to a sticker with /removesticker and it's gone.")
+        return
+    set_name = replied.sticker.set_name
+    user_id = update.effective_user.id
+    if set_name not in state.list_user_packs(user_id) and user_id not in ADMIN_IDS:
+        await update.message.reply_text("That one's not yours.")
+        return
+    try:
+        await context.bot.delete_sticker_from_set(sticker=replied.sticker.file_id)
+        await update.message.reply_text("Removed. Gone.")
+        await log(context.bot, f"Sticker removed from {set_name} by user {user_id}")
+    except BadRequest as e:
+        await update.message.reply_text(f"Couldn't remove it: {e}")
+
+
+def _get_help_text(user_id: int) -> str:
+    is_admin = user_id in ADMIN_IDS
+    text = (
+        "<b>Xtickerz Studio</b>\n"
+        "<blockquote>Turn any file into a sticker. No editing. Just send.</blockquote>\n\n"
+        "<b>Quick Start</b>\n"
+        " 1. Create a pack\n"
+        " 2. Pick a link\n"
+        " 3. Send a file\n\n"
+        "<b>Commands</b>\n"
+        " /start : open studio\n"
+        " /newpack [name] [link] : new pack\n"
+        " /mypacks : your packs\n"
+        " /help : this help\n"
+        " /cancel : cancel\n"
+    )
+    if is_admin:
+        text += (
+            "\n<b>Admin</b>\n"
+            " /ban [id] : ban\n"
+            " /unban [id] : unban\n"
+            " /stats : global stats\n"
+            " /health : status\n"
+            " /broadcast [text] : broadcast\n"
+            " /settings : settings\n"
+            " /setstarttext [text] : update welcome\n"
+            " /setstartimage : update image [none] to clear\n"
+            " /setforcesub [channel or off] : force channel\n"
+            " /setratelimit [n] : rate limit count\n"
+            " /setratewindow [seconds] : rate limit window\n"
+            " /resetsettings : reset\n"
+        )
+    return text
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = _get_help_text(update.effective_user.id)
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=help_keyboard())
+
+
+async def handle_help_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, action = query.data.split(":")
+    user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
+    if action == "open":
+        text = _get_help_text(user_id)
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
+    elif action == "back":
+        settings = state.get_settings()
+        text = settings["start_text"]
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=start_keyboard())
+            else:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=start_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=start_keyboard())
+
+
+# ---------- start extra buttons ----------
+
+async def handle_settings_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, action = query.data.split(":")
+    user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
+
+    if action == "cycleshape":
+        current = state.get_user_shape(user_id)
+        nxt = {"square": "rounded", "rounded": "circle", "circle": "square"}[current]
+        state.set_user_shape(user_id, nxt)
+    elif action == "togglebg":
+        state.set_bg_removal(user_id, not state.get_bg_removal(user_id))
+    elif action == "toggleautoadd":
+        state.set_auto_add(user_id, not state.get_auto_add(user_id))
+    elif action != "open":
+        return
+
+    text = (
+        "<b>Settings</b>\n"
+        "<blockquote>Shape and background removal apply to every sticker you make. Background removal only "
+        "works on photos and looks for a solid or plain background. Turn Auto Add off to review and pick an "
+        "emoji before each sticker gets added, instead of it happening automatically.</blockquote>"
+    )
+    kb = settings_keyboard(state.get_user_shape(user_id), state.get_bg_removal(user_id), state.get_auto_add(user_id))
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=kb)
+    except BadRequest:
+        await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=kb)
+
+
+async def handle_start_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, action = query.data.split(":")
+    user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
+    if action == "mypacks":
+        packs = state.list_user_packs(user_id)
+        visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+        if not visible:
+            text = "<b>No packs yet</b>\n<blockquote>Tap Create and I'll build you one.</blockquote>"
+            try:
+                if query.message.photo:
+                    await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=packs_keyboard([]))
+                else:
+                    await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=packs_keyboard([]))
+            except BadRequest:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=packs_keyboard([]))
+            return
+        text = "<b>Your Packs</b>\n<blockquote>Tap a pack to manage it.</blockquote>"
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=packs_keyboard(visible))
+            else:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=packs_keyboard(visible))
+        except BadRequest:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=packs_keyboard(visible))
+    elif action == "create":
+        state.set_awaiting(user_id, "create_pack")
+        text = "<b>New Pack</b>\n<blockquote>What is the name of your new pack?</blockquote>"
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
+    elif action == "stats":
+        packs = state.list_user_packs(user_id)
+        total = len(packs)
+        total_uses = state.get_stat("stickers_created")
+        today_uses = state.get_today_uses()
+        week_uses = state.get_week_uses()
+        today_packs = state.get_today_packs_count()
+        week_packs = state.get_week_packs_count()
+        most = state.get_most_used_pack(user_id)
+        if most:
+            most_display = most[0].split("_by_")[0].replace("_", " ") + f" : {most[1]} uses"
+        else:
+            most_display = "none"
+        active = state.get_active_pack(user_id) or "none"
+        if active != "none":
+            active = active.split("_by_")[0].replace("_", " ")
+        text = (
+            f"<b>Stats</b>\n"
+            f"<blockquote>{total} packs | {total_uses} stickers</blockquote>\n"
+            f"Most used: {most_display}\n"
+            f"Today: {today_uses} in {today_packs} packs\n"
+            f"Week: {week_uses} in {week_packs} packs\n"
+            f"Active: {active}"
+        )
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=help_keyboard())
+
+
+async def handle_pack_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, _, pack_name = query.data.split(":", 2)
+    user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
+    if not state.is_owner_or_coowner(user_id, pack_name):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+    state.clear_awaiting(user_id)
+    state.set_active_pack(user_id, pack_name)
+    state.add_user_pack(user_id, pack_name)
+    is_hidden = state.is_pack_hidden(user_id, pack_name)
+    stored_title = state.get_pack_title(pack_name)
+    watermark = state.get_pack_title(f"watermark:{pack_name}")
+    try:
+        s = await context.bot.get_sticker_set(pack_name)
+        count = len(s.stickers)
+        title = stored_title or s.title
+    except BadRequest:
+        count = 0
+        title = stored_title or pack_name.split("_by_")[0].replace("_", " ")
+    link = f"https://t.me/addstickers/{pack_name}"
+    text = (
+        f"<b>{title}</b>\n"
+        f"<blockquote>{link}</blockquote>\n"
+        f"{count} stickers | {'Hidden' if is_hidden else 'Visible'}"
+    )
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+        else:
+            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+    except BadRequest:
+        await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+
+
+async def handle_pack_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":", 2)
+    _, action, pack_name = parts
+    user_id = query.from_user.id
+    if state.is_banned(user_id):
+        await query.answer("Access denied.", show_alert=True)
+        return
+    if not state.is_owner_or_coowner(user_id, pack_name):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+    if action == "add":
+        state.clear_awaiting(user_id)
+        state.set_active_pack(user_id, pack_name)
+        state.add_user_pack(user_id, pack_name)
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        text = f"Active pack set to {display}. Send a photo, GIF or video to add stickers."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+            else:
+                await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+    elif action == "rename":
+        state.set_awaiting(user_id, "rename_pack", {"pack": pack_name})
+        text = "Send new title for pack."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "frame":
+        state.set_awaiting(user_id, "set_frame", {"pack": pack_name})
+        text = "Send a photo to set as pack frame."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "stat":
+        try:
+            s = await context.bot.get_sticker_set(pack_name)
+            count = len(s.stickers)
+            title = s.title
+        except BadRequest:
+            count = 0
+            title = pack_name.split("_by_")[0].replace("_", " ")
+        coowners = state.list_coowners(pack_name)
+        co_text = ", ".join(str(x) for x in coowners) if coowners else "none"
+        owner_id = state.get_pack_owner(pack_name)
+        owner_text = str(owner_id) if owner_id else "unknown"
+        is_hidden = state.is_pack_hidden(user_id, pack_name)
+        pack_uses = state.get_pack_uses(pack_name)
+        text = f"Pack stats.\nTitle: {title}\nStickers: {count}\nUses: {pack_uses}\nHidden: {'yes' if is_hidden else 'no'}\nOwner: {owner_text}\nCoowners: {co_text}"
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+            else:
+                await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, is_hidden))
+    elif action == "transfer":
+        if not state.is_original_owner(user_id, pack_name):
+            await query.answer("Only the pack owner can transfer.", show_alert=True)
+            return
+        state.set_awaiting(user_id, "transfer_pack", {"pack": pack_name})
+        text = "Send user id to give access to this pack."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=help_keyboard())
+            else:
+                await query.edit_message_text(text=text, reply_markup=help_keyboard())
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=help_keyboard())
+    elif action == "hide":
+        is_hidden = state.is_pack_hidden(user_id, pack_name)
+        if is_hidden:
+            state.show_pack(user_id, pack_name)
+            new_hidden = False
+            text = "Pack is now visible."
+        else:
+            state.hide_pack(user_id, pack_name)
+            new_hidden = True
+            text = "Pack is now hidden."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+            else:
+                await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=pack_detail_keyboard(pack_name, new_hidden))
+    elif action == "delete":
+        if not state.is_original_owner(user_id, pack_name):
+            await query.answer("Only the pack owner can delete.", show_alert=True)
+            return
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        text = f"Delete pack {display}? This cannot be undone."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=delete_confirm_keyboard(pack_name))
+            else:
+                await query.edit_message_text(text=text, reply_markup=delete_confirm_keyboard(pack_name))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=delete_confirm_keyboard(pack_name))
+    elif action == "delete_confirm":
+        if not state.is_original_owner(user_id, pack_name):
+            await query.answer("Only the pack owner can delete.", show_alert=True)
+            return
+        try:
+            await context.bot.delete_sticker_set(name=pack_name)
+        except Exception:
+            pass
+        state.delete_user_pack(user_id, pack_name)
+        packs = state.list_user_packs(user_id)
+        visible = [p for p in packs if not state.is_pack_hidden(user_id, p)]
+        text = "Pack deleted."
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=packs_keyboard(visible))
+            else:
+                await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
+        except BadRequest:
+            await query.edit_message_text(text=text, reply_markup=packs_keyboard(visible))
+        await log(context.bot, f"Pack {pack_name} deleted by user {user_id}")
+
+
+async def handle_duplicate_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        _, action, pack_name, file_unique_id = query.data.split(":", 3)
+    except ValueError:
+        await query.edit_message_text("That request doesn't check out. Send the file again.")
+        return
+    user_id = query.from_user.id
+    awaiting = state.get_awaiting(user_id)
+    if not awaiting or awaiting.get("action") != "duplicate_pending":
+        await query.edit_message_text("That window closed. Send the file again.")
+        return
+    data = awaiting.get("data", {})
+    if data.get("pack") != pack_name or data.get("file_unique_id") != file_unique_id:
+        await query.edit_message_text("That window closed. Send the file again.")
+        return
+    file_id = data.get("file_id")
+    kind = data.get("kind", "photo")
+    if action == "add":
+        state.clear_awaiting(user_id)
+        await query.edit_message_text("Already seen this one — adding it again anyway. Hang tight.")
+        # Create a job and directly add
+        job_id = str(uuid.uuid4().hex)
+        job = {
+            "kind": kind, "file_id": file_id, "file_path": "",
+            "pack": pack_name, "width": 512, "height": 512,
+            "user_id": user_id, "file_unique_id": file_unique_id,
+        }
+        state.save_job(job_id, job)
+        await build_preview(query.message.chat_id, context, job_id, job, crop=None)
+    elif action == "replace":
+        old_file_id = state.get_file_sticker(pack_name, file_unique_id)
+        if old_file_id:
+            try:
+                await context.bot.delete_sticker_from_set(sticker=old_file_id)
+                state.remove_file_from_pack(pack_name, file_unique_id)
+                await query.edit_message_text("Old one's gone. Swapping in the new one — hang tight.")
+            except BadRequest as e:
+                await query.edit_message_text(f"Could not delete old sticker: {e}")
+                state.clear_awaiting(user_id)
+                return
+        else:
+            await query.edit_message_text("Nothing to replace, so I'm just adding it fresh. Hang tight.")
+        state.clear_awaiting(user_id)
+        job_id = str(uuid.uuid4().hex)
+        job = {
+            "kind": kind, "file_id": file_id, "file_path": "",
+            "pack": pack_name, "width": 512, "height": 512,
+            "user_id": user_id, "file_unique_id": file_unique_id,
+        }
+        state.save_job(job_id, job)
+        await build_preview(query.message.chat_id, context, job_id, job, crop=None)
+    elif action == "delete":
+        old_file_id = state.get_file_sticker(pack_name, file_unique_id)
+        if old_file_id:
+            try:
+                await context.bot.delete_sticker_from_set(sticker=old_file_id)
+                state.remove_file_from_pack(pack_name, file_unique_id)
+                await query.edit_message_text("Deleted. Gone.")
+            except BadRequest as e:
+                await query.edit_message_text(f"Could not delete: {e}")
+        else:
+            await query.edit_message_text("Nothing there to delete.")
+        state.clear_awaiting(user_id)
+    elif action == "cancel":
+        state.clear_awaiting(user_id)
+        await query.edit_message_text("Cancelled. Whatever it was, it's dropped.")
+
+
+async def handle_awaiting_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    awaiting = state.get_awaiting(user_id)
+    if not awaiting:
+        return False
+    action = awaiting.get("action")
+    data = awaiting.get("data", {})
+    text = update.message.text.strip() if update.message.text else ""
+    if action == "create_pack":
+        if not text:
+            await update.message.reply_text("Send an actual pack name.", parse_mode="HTML")
+            return True
+        title = text.strip()
+        if len(title) < 2 or len(title) > 50:
+            await update.message.reply_text("<b>Invalid name</b>\n<blockquote>Keep it between 2 and 50 characters.</blockquote>", parse_mode="HTML")
+            return True
+        state.set_awaiting(user_id, "create_pack_link", {"title": title})
+        await update.message.reply_text("<b>Choose a link</b>\n<blockquote>Letters and numbers only. It becomes part of https://t.me/addstickers/[link]</blockquote>", parse_mode="HTML")
+        return True
+    elif action == "create_pack_link":
+        title = data.get("title")
+        if not title:
+            state.clear_awaiting(user_id)
+            await update.message.reply_text("<b>Error</b>\n<blockquote>Lost the pack name somewhere. Start over with Create.</blockquote>", parse_mode="HTML")
+            return True
+        if not text:
+            await update.message.reply_text("<b>Invalid link</b>\n<blockquote>Letters and numbers only.</blockquote>", parse_mode="HTML")
+            return True
+        clean_link = text.strip().replace(" ", "")
+        if not clean_link.isalnum():
+            await update.message.reply_text("<b>Invalid link</b>\n<blockquote>Letters and numbers only.</blockquote>", parse_mode="HTML")
+            return True
+        if not clean_link[0].isalpha():
+            await update.message.reply_text("<b>Invalid link</b>\n<blockquote>Needs to start with a letter.</blockquote>", parse_mode="HTML")
+            return True
+        if len(clean_link) < 2 or len(clean_link) > 30:
+            await update.message.reply_text("<b>Invalid link</b>\n<blockquote>Keep it 2 to 30 characters.</blockquote>", parse_mode="HTML")
+            return True
+        pack_name = f"{clean_link}_by_{BOT_USERNAME.lower()}"
+        existing = [p.lower() for p in state.list_user_packs(user_id)]
+        if pack_name.lower() in existing:
+            await update.message.reply_text("<b>Link taken</b>\n<blockquote>You already own a pack with this one. Pick another.</blockquote>", parse_mode="HTML")
+            return True
+        try:
+            await context.bot.get_sticker_set(pack_name)
+            await update.message.reply_text("<b>Link taken</b>\n<blockquote>Someone beat you to it. Try another.</blockquote>", parse_mode="HTML")
+            return True
+        except BadRequest:
+            pass
+        state.set_active_pack(user_id, pack_name)
+        state.add_user_pack(user_id, pack_name)
+        state.set_pack_title(pack_name, title)
+        watermark = f"{clean_link}_by_xtickerz"
+        state.set_pack_title(f"watermark:{pack_name}", watermark)
+        state.clear_awaiting(user_id)
+        await update.message.reply_text(f"<b>Pack Ready</b>\n<blockquote>{title}</blockquote>\nLink: https://t.me/addstickers/{pack_name}\n\nSend a photo, GIF, or video and I'll turn it into your first sticker ◝(ᵔᗜᵔ)◜", parse_mode="HTML", reply_markup=pack_detail_keyboard(pack_name, False))
+        await log(context.bot, f"Pack created {pack_name} titled {title} by user {user_id}")
+        return True
+    elif action == "rename_pack":
+        pack_name = data.get("pack")
+        if not pack_name or not text:
+            await update.message.reply_text("Send an actual title.")
+            return True
+        try:
+            await context.bot.set_sticker_set_title(name=pack_name, title=text)
+            state.set_pack_title(pack_name, text)
+            state.clear_awaiting(user_id)
+            await update.message.reply_text("Renamed. Done.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        except BadRequest as e:
+            await update.message.reply_text(f"Couldn't rename it: {e}")
+        return True
+    elif action == "transfer_pack":
+        pack_name = data.get("pack")
+        try:
+            new_id = int(text)
+        except ValueError:
+            await update.message.reply_text("Send a real user ID, numbers only.")
+            return True
+        state.add_coowner(pack_name, new_id)
+        state.clear_awaiting(user_id)
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        await update.message.reply_text(f"Access granted. {new_id} can now touch {display}.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        await log(context.bot, f"Pack {pack_name} shared to {new_id} by {user_id}")
+        return True
+    elif action == "feedback_text":
+        rating = data.get("rating", 0)
+        state.save_feedback(user_id, rating, text)
+        state.clear_awaiting(user_id)
+        await update.message.reply_text(f"Logged. {CLOVER * rating} noted -- thanks for the read.")
+        await log(context.bot, f"Feedback: {rating}/5 clovers from user {user_id} -- {text or '(no comment)'}")
+        return True
+    return False
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await handle_awaiting_text(update, context):
+        return
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state.clear_awaiting(update.effective_user.id)
+    await update.message.reply_text("Cancelled. Whatever it was, it's dropped.", reply_markup=start_keyboard())
+
+
+# ---------- media intake ----------
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state.remember_chat(update.effective_chat.id)
+    if await _blocked(update, context):
+        return
+
+    user_id = update.effective_user.id
+    awaiting = state.get_awaiting(user_id)
+    if awaiting and awaiting.get("action") == "set_frame":
+        pack_name = awaiting["data"].get("pack")
+        if not state.is_owner_or_coowner(user_id, pack_name):
+            await update.message.reply_text("That one's not yours.")
+            state.clear_awaiting(user_id)
+            return
+        if not update.message.photo:
+            await update.message.reply_text("Send a photo to use as the thumbnail.")
+            return
+        try:
+            file = await update.message.photo[-1].get_file()
+            local_path = media.tmp_path(".jpg")
+            await file.download_to_drive(local_path)
+            try:
+                with open(local_path, "rb") as f:
+                    await context.bot.set_sticker_set_thumbnail(name=pack_name, user_id=user_id, format="static", thumbnail=f)
+            except BadRequest as e:
+                if "format" in str(e).lower():
+                    with open(local_path, "rb") as f:
+                        await context.bot.set_sticker_set_thumbnail(name=pack_name, user_id=user_id, format="video", thumbnail=f)
+                else:
+                    raise
+            os.remove(local_path)
+            state.clear_awaiting(user_id)
+            await update.message.reply_text("Thumbnail updated. Looking sharp.", reply_markup=pack_detail_keyboard(pack_name, state.is_pack_hidden(user_id, pack_name)))
+        except BadRequest as e:
+            await update.message.reply_text(f"Couldn't set the thumbnail: {e}")
+        except Exception as e:
+            await update.message.reply_text(f"Something broke: {e}")
+        return
+
+    if not state.check_rate_limit(user_id):
+        await update.message.reply_text("Get a hold, sucker. Ease up — try again shortly.")
+        return
+
+    active_pack = state.get_active_pack(user_id)
+    if not active_pack:
+        packs = state.list_user_packs(user_id)
+        if packs:
+            active_pack = packs[0]
+            state.set_active_pack(user_id, active_pack)
+        else:
+            clean = f"pack{user_id % 10000}"
+            active_pack = f"{clean}_by_{BOT_USERNAME.lower()}"
+            state.set_active_pack(user_id, active_pack)
+            state.add_user_pack(user_id, active_pack)
+            state.set_pack_title(active_pack, clean.replace("_", " "))
+            state.set_pack_title(f"watermark:{active_pack}", f"{clean}_by_xtickerz")
+            display = clean.replace("_", " ")
+            await update.message.reply_text(f"New pack: {display}. Sticker's going in now.")
+    msg = update.message
+    if msg.photo:
+        tg_file, kind = msg.photo[-1], "photo"
+    elif msg.video:
+        tg_file, kind = msg.video, "video"
+    elif msg.animation:
+        tg_file, kind = msg.animation, "gif"
+    elif msg.sticker:
+        tg_file = msg.sticker
+        if getattr(msg.sticker, "is_video", False) or getattr(msg.sticker, "is_animated", False):
+            kind = "video"
+        else:
+            kind = "photo"
+    elif msg.document:
+        mime = (msg.document.mime_type or "").lower()
+        name = (msg.document.file_name or "").lower()
+        tg_file = msg.document
+        if "video" in mime or "gif" in mime or "animation" in mime or name.endswith((".mp4", ".webm", ".gif", ".mov")):
+            kind = "video"
+        elif "image" in mime or name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            kind = "photo"
+        else:
+            kind = "photo"
+    else:
+        await update.message.reply_text("That's not something I can sticker-ify. Send a photo, GIF, or video (˶˃⤙˂˶)")
+        return
+
+    file_unique_id = getattr(tg_file, "file_unique_id", None)
+    if file_unique_id and state.is_duplicate_file(active_pack, file_unique_id):
+        stored = state.get_pack_title(active_pack)
+        display = stored or active_pack.split("_by_")[0].replace("_", " ")
+        await update.message.reply_text(
+            f"This file is already in pack {display}. Add again, replace existing, or delete?",
+            reply_markup=duplicate_keyboard(active_pack, file_unique_id)
+        )
+        state.set_awaiting(user_id, "duplicate_pending", {"pack": active_pack, "file_id": tg_file.file_id, "file_unique_id": file_unique_id, "kind": kind})
+        return
+
+    try:
+        file = await tg_file.get_file()
+    except Exception:
+        await update.message.reply_text("Couldn't grab that file. Try again.")
+        return
+    try:
+        local_path = media.tmp_path(os.path.splitext(file.file_path or "")[1] or ".bin")
+        await file.download_to_drive(local_path)
+        width, height, _ = media.probe_dimensions(local_path)
+    except Exception:
+        width, height = 512, 512
+        try:
+            local_path = media.tmp_path(".bin")
+            await file.download_to_drive(local_path)
+            width, height, _ = media.probe_dimensions(local_path)
+        except Exception:
+            width, height = 512, 512
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
+
+    job_id = uuid.uuid4().hex
+    job = {
+        "kind": kind, "file_id": tg_file.file_id, "file_path": file.file_path,
+        "pack": active_pack, "width": width, "height": height,
+        "user_id": user_id,
+        "file_unique_id": getattr(tg_file, "file_unique_id", ""),
+    }
+    state.save_job(job_id, job)
+
+    if not media.needs_crop(width, height):
+        await build_preview(update.effective_chat.id, context, job_id, job, crop=None)
+        return
+
+    options = media.crop_options_for(width, height)
+    await update.message.reply_text(
+        "Image is not square. Choose area to use.",
+        reply_markup=crop_choice_keyboard(job_id, options),
+    )
+
+
+async def handle_crop_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, job_id, choice = query.data.split(":")
+    job = state.get_job(job_id)
+    if not job:
+        await query.edit_message_text("That window closed. Send the media again.")
+        return
+    if job.get("pack") and not state.is_owner_or_coowner(query.from_user.id, job["pack"]):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+    box = media.crop_box(job["width"], job["height"], choice)
+    job["crop"] = list(box)
+    state.save_job(job_id, job)
+    await query.edit_message_text("Cropping. Hang tight ₍^. .^₎⟆")
+    await build_preview(query.message.chat_id, context, job_id, job, crop=box)
+
+
+async def build_preview(chat_id, context, job_id, job, crop):
+    bot_file = await context.bot.get_file(job["file_id"])
+    local_path = media.tmp_path(os.path.splitext(job["file_path"])[1] or ".bin")
+    await bot_file.download_to_drive(local_path)
+
+    try:
+        if job["kind"] == "photo":
+            shape = state.get_user_shape(job.get("user_id") or chat_id)
+            remove_bg = state.get_bg_removal(job.get("user_id") or chat_id)
+            out_path = media.convert_image_to_sticker(local_path, crop, shape=shape, remove_bg=remove_bg)
+            sticker_format = "static"
+        else:
+            shape = state.get_user_shape(job.get("user_id") or chat_id)
+            out_path = media.convert_video_to_sticker(local_path, crop, shape=shape)
+            sticker_format = "video"
+    finally:
+        os.remove(local_path)
+
+    max_bytes = MAX_STATIC_BYTES if sticker_format == "static" else MAX_VIDEO_BYTES
+    if os.path.getsize(out_path) > max_bytes:
+        os.remove(out_path)
+        state.clear_job(job_id)
+        await context.bot.send_message(chat_id, "File is too large. Try a shorter clip.")
+        return
+
+    job["out_path"] = out_path
+    job["sticker_format"] = sticker_format
+    state.save_job(job_id, job)
+
+    user_id_for_pref = job.get("user_id") or chat_id
+    if not state.get_auto_add(user_id_for_pref):
+        allow_redo = media.needs_crop(job["width"], job["height"])
+        with open(out_path, "rb") as f:
+            await context.bot.send_sticker(chat_id, sticker=f, reply_markup=preview_keyboard(job_id, allow_redo))
+        return
+
+    # Direct add with random emoji, no preview step
+    pack_name = job["pack"]
+    user_id = job.get("user_id") or chat_id
+    try:
+        with open(out_path, "rb") as f:
+            emoji = random.choice(RANDOM_EMOJIS)
+            sticker = InputSticker(sticker=f, format=sticker_format, emoji_list=[emoji])
+            title = state.get_pack_title(pack_name) or pack_name.split("_by_")[0].replace("_", " ")
+            try:
+                await context.bot.create_new_sticker_set(
+                    user_id=user_id, name=pack_name,
+                    title=title,
+                    stickers=[sticker],
+                )
+            except BadRequest as e:
+                err = str(e).lower()
+                if "already" in err or "exist" in err or "occupied" in err:
+                    f.seek(0)
+                    try:
+                        await context.bot.add_sticker_to_set(user_id=user_id, name=pack_name, sticker=sticker)
+                    except BadRequest as e2:
+                        err2 = str(e2).lower()
+                        if "owner" in err2 or "not found" in err2 or "invalid" in err2:
+                            owner = state.get_pack_owner(pack_name)
+                            if owner and owner != user_id:
+                                f.seek(0)
+                                await context.bot.add_sticker_to_set(user_id=owner, name=pack_name, sticker=sticker)
+                            else:
+                                raise
+                        else:
+                            raise
+                elif "title" in err or "name" in err or "invalid" in err:
+                    state.delete_user_pack(user_id, pack_name)
+                    await context.bot.send_message(chat_id, f"Pack name or title invalid. This pack has been removed. Please create a new pack. Use only letters and numbers for link, starting with a letter.")
+                    state.clear_job(job_id)
+                    try:
+                        os.remove(out_path)
+                    except Exception:
+                        pass
+                    _cleanup_out_path(job)
+                    return
+                elif "sticker" in err or "file" in err or "format" in err:
+                    await context.bot.send_message(chat_id, f"Sticker file invalid. Try another image.")
+                    raise
+                else:
+                    raise
+        state.add_user_pack(user_id, pack_name)
+        state.bump_sticker_use(pack_name)
+        file_uid = job.get("file_unique_id")
+        if file_uid:
+            state.add_file_to_pack(pack_name, file_uid, job.get("file_id", ""))
+        stored = state.get_pack_title(pack_name)
+        display = stored or pack_name.split("_by_")[0].replace("_", " ")
+        try:
+            s = await context.bot.get_sticker_set(pack_name)
+            count = len(s.stickers)
+        except BadRequest:
+            count = state.get_pack_uses(pack_name)
+            if count == 0:
+                count = 1
+        link = f"https://t.me/addstickers/{pack_name}"
+        await context.bot.send_message(chat_id, f"<b>Sticker Added</b>\n<blockquote>{display}</blockquote>\nThis pack now has {count} stickers.\n{link}", parse_mode="HTML", disable_web_page_preview=False)
+        await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
+    except BadRequest as e:
+        err2 = str(e).lower()
+        if "invalid" in err2 and ("name" in err2 or "title" in err2):
+            state.delete_user_pack(user_id, pack_name)
+            await context.bot.send_message(chat_id, f"Pack name or title invalid. This pack has been removed. Please create a new pack.")
+        else:
+            await context.bot.send_message(chat_id, f"Could not create sticker: {e}")
+        await log(context.bot, f"Sticker failed for user {user_id}: {e}")
+        raise
+    except Exception as e:
+        await context.bot.send_message(chat_id, f"Could not create sticker: {e}")
+        await log(context.bot, f"Sticker failed for user {user_id}: {e}")
+        raise
+    finally:
+        _cleanup_out_path(job)
+        state.clear_job(job_id)
+        try:
+            os.remove(out_path)
+        except Exception:
+            pass
+
+
+async def handle_preview_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, job_id, action = query.data.split(":")
+    job = state.get_job(job_id)
+    if not job:
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+    if job.get("pack") and not state.is_owner_or_coowner(query.from_user.id, job["pack"]):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+
+    if action == "cancel":
+        _cleanup_out_path(job)
+        state.clear_job(job_id)
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    if action == "redo":
+        _cleanup_out_path(job)
+        job.pop("out_path", None)
+        state.save_job(job_id, job)
+        options = media.crop_options_for(job["width"], job["height"])
+        await query.edit_message_reply_markup(reply_markup=None)
+        await context.bot.send_message(
+            query.message.chat_id,
+            "Choose area again.",
+            reply_markup=crop_choice_keyboard(job_id, options),
+        )
+        return
+
+    if action == "add":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await context.bot.send_message(
+            query.message.chat_id, "Choose an emoji for this sticker.", reply_markup=emoji_keyboard(job_id)
+        )
+
+
+async def handle_emoji_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, job_id, emoji = query.data.split(":")
+    job = state.get_job(job_id)
+    if not job or "out_path" not in job:
+        await query.edit_message_text("That window closed. Send the media again.")
+        return
+    if job.get("pack") and not state.is_owner_or_coowner(query.from_user.id, job["pack"]):
+        await query.answer("Not your pack.", show_alert=True)
+        return
+
+    emoji = "🙂" if emoji == "default" else emoji
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    out_path = job["out_path"]
+    pack_name = job["pack"]
+
+    try:
+        with open(out_path, "rb") as f:
+            sticker = InputSticker(sticker=f, format=job["sticker_format"], emoji_list=[emoji])
+            try:
+                await context.bot.create_new_sticker_set(
+                    user_id=user_id, name=pack_name,
+                    title=pack_name.split("_by_")[0].replace("_", " "),
+                    stickers=[sticker],
+                )
+            except BadRequest as e:
+                if "already" not in str(e).lower() and "exist" not in str(e).lower():
+                    raise
+                f.seek(0)
+                await context.bot.add_sticker_to_set(user_id=user_id, name=pack_name, sticker=sticker)
+
+        state.add_user_pack(user_id, pack_name)
+        state.bump_sticker_use(pack_name)
+        display = pack_name.split("_by_")[0].replace("_", " ")
+        try:
+            s = await context.bot.get_sticker_set(pack_name)
+            count = len(s.stickers)
+        except BadRequest:
+            count = state.get_pack_uses(pack_name)
+        await query.edit_message_text(f"Sticker added to {display}. This pack now has {count} stickers.")
+        await log(context.bot, f"Sticker added to {pack_name} by user {user_id}")
+    except Exception as e:
+        await context.bot.send_message(chat_id, "Could not create sticker. Please try again.")
+        await log(context.bot, f"Sticker failed for user {user_id}: {e}")
+        raise
+    finally:
+        _cleanup_out_path(job)
+        state.clear_job(job_id)
+
+
+def _cleanup_out_path(job: dict):
+    path = job.get("out_path")
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+# ---------- admin ----------
+
+def admin_only(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id not in ADMIN_IDS:
+            return
+        await func(update, context)
+    return wrapper
+
+
+@admin_only
+async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return
+    state.ban_user(int(context.args[0]))
+    await update.message.reply_text("Banned. One less headache.")
+    await log(context.bot, f"User {context.args[0]} banned by admin {update.effective_user.id}")
+
+
+@admin_only
+async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return
+    state.unban_user(int(context.args[0]))
+    await update.message.reply_text("Unbanned. Clean slate.")
+
+
+@admin_only
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    total = state.get_stat("stickers_created")
+    today = state.get_today_uses()
+    week = state.get_week_uses()
+    today_packs = state.get_today_packs_count()
+    week_packs = state.get_week_packs_count()
+    most = state.get_most_used_pack()
+    if most:
+        most_display = most[0].split("_by_")[0].replace("_", " ") + f" : {most[1]} uses"
+    else:
+        most_display = "none"
+    await update.message.reply_text(
+        f"Stats.\n"
+        f"Total stickers: {total}\n"
+        f"Most used pack: {most_display}\n"
+        f"Packs used today: {today_packs}\n"
+        f"Stickers today: {today}\n"
+        f"Packs used this week: {week_packs}\n"
+        f"Stickers this week: {week}\n"
+        f"Chats: {len(state.list_chats())}"
+    )
+
+
+@admin_only
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Use: /broadcast [text]")
+        return
+    text = " ".join(context.args)
+    chats = state.list_chats()
+    sent, failed = 0, 0
+    for chat_id in chats:
+        try:
+            await context.bot.send_message(chat_id, text)
+            sent += 1
+        except (Forbidden, BadRequest):
+            failed += 1
+    await update.message.reply_text(f"Launched — {sent} got it, {failed} dodged it.")
+
+
+@admin_only
+async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import shutil
+    ffmpeg_ok = os.path.exists(media.FFMPEG)
+    try:
+        state.redis.set("healthcheck", "1", ex=10)
+        redis_ok = state.redis.get("healthcheck") == "1"
+    except Exception:
+        redis_ok = False
+    free_gb = shutil.disk_usage("/tmp").free / (1024 ** 3)
+    await update.message.reply_text(
+        f"ffmpeg: {'ok' if ffmpeg_ok else 'missing'}\n"
+        f"redis: {'ok' if redis_ok else 'failing'}\n"
+        f"free: {free_gb:.1f} GB\n"
+        f"chats: {len(state.list_chats())}\n"
+        f"stickers: {state.get_stat('stickers_created')}"
+    )
+
+
+@admin_only
+async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = state.get_settings()
+    await update.message.reply_text(
+        "Current settings:\n"
+        f"start text: {s['start_text'][:60]}\n"
+        f"start image: {'set' if s['start_image'] else 'none'}\n"
+        f"force channel: {s['force_sub_channel'] or 'none'}\n"
+        f"limit: {s['rate_limit_per_hour']} per {s.get('rate_limit_window_seconds', 600)}s\n\n"
+        "Use:\n"
+        " /setstarttext [text]\n"
+        " /setstartimage [reply to photo or none]\n"
+        " /setforcesub [channel or off]\n"
+        " /setratelimit [n]\n"
+        " /setratewindow [seconds]\n"
+        " /resetsettings"
+    )
+
+
+@admin_only
+async def setstarttext(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Use: /setstarttext [text]")
+        return
+    state.set_setting("start_text", update.message.text.split(" ", 1)[1])
+    await update.message.reply_text("Start text updated.")
+
+
+@admin_only
+async def setstartimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args and context.args[0].lower() == "none":
+        state.set_setting("start_image", "")
+        await update.message.reply_text("Start image cleared.")
+        return
+    replied = update.message.reply_to_message
+    if not replied or not replied.photo:
+        await update.message.reply_text("Reply to a photo with /setstartimage or use /setstartimage [none]")
+        return
+    state.set_setting("start_image", replied.photo[-1].file_id)
+    await update.message.reply_text("Start image updated.")
+
+
+@admin_only
+async def setforcesub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Use: /setforcesub [channel or off]")
+        return
+    value = "" if context.args[0].lower() == "off" else context.args[0]
+    state.set_setting("force_sub_channel", value)
+    await update.message.reply_text(f"Force join {'off' if not value else value}. Updated.")
+
+
+@admin_only
+async def setratelimit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Use: /setratelimit [n]")
+        return
+    state.set_setting("rate_limit_per_hour", context.args[0])
+    await update.message.reply_text(f"Limit set to {context.args[0]} per window.")
+
+
+@admin_only
+async def setratewindow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Use: /setratewindow [seconds]")
+        return
+    state.set_setting("rate_limit_window_seconds", context.args[0])
+    await update.message.reply_text(f"Window set to {context.args[0]} seconds.")
+
+
+@admin_only
+async def resetsettings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state.reset_settings()
+    await update.message.reply_text("Settings reset to defaults.")
+
+
+async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
+    tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))[-1500:]
+    logging.getLogger("xtickerzbot").error("unhandled error:\n%s", tb)
+    await log(context.bot, f"Error:\n{tb}")
+
+
+def register_handlers(app: Application):
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("appreciate", appreciate))
+    app.add_handler(CommandHandler("feedback", feedback_cmd))
+    app.add_handler(CommandHandler("skip", skip_cmd))
+    app.add_handler(CommandHandler("feedbackstats", feedbackstats))
+    app.add_handler(CommandHandler("newpack", newpack))
+    app.add_handler(CommandHandler("mypacks", mypacks))
+    app.add_handler(CommandHandler("usepack", usepack))
+    app.add_handler(CommandHandler("renamepack", renamepack))
+    app.add_handler(CommandHandler("removesticker", removesticker))
+
+    app.add_handler(CommandHandler("ban", ban))
+    app.add_handler(CommandHandler("unban", unban))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("health", health))
+    app.add_handler(CommandHandler("settings", settings_cmd))
+    app.add_handler(CommandHandler("setstarttext", setstarttext))
+    app.add_handler(CommandHandler("setstartimage", setstartimage))
+    app.add_handler(CommandHandler("setforcesub", setforcesub))
+    app.add_handler(CommandHandler("setratelimit", setratelimit))
+    app.add_handler(CommandHandler("setratewindow", setratewindow))
+    app.add_handler(CommandHandler("resetsettings", resetsettings))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(
+        filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.Document.ALL | filters.Sticker.ALL,
+        handle_media,
+    ))
+    app.add_handler(CallbackQueryHandler(handle_start_nav, pattern=r"^start:"))
+    app.add_handler(CallbackQueryHandler(handle_settings_nav, pattern=r"^settings:"))
+    app.add_handler(CallbackQueryHandler(handle_donate_choice, pattern=r"^donate:"))
+    app.add_handler(CallbackQueryHandler(handle_feedback_rating, pattern=r"^feedback:"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))
+    app.add_handler(CallbackQueryHandler(handle_pack_view, pattern=r"^pack:view:"))
+    app.add_handler(CallbackQueryHandler(handle_pack_action, pattern=r"^pack:(add|rename|frame|stat|transfer|hide|delete_confirm|delete):"))
+    app.add_handler(CallbackQueryHandler(handle_duplicate_choice, pattern=r"^dup:"))
+    app.add_handler(CallbackQueryHandler(handle_crop_choice, pattern=r"^crop:"))
+    app.add_handler(CallbackQueryHandler(handle_preview_choice, pattern=r"^preview:"))
+    app.add_handler(CallbackQueryHandler(handle_emoji_choice, pattern=r"^emoji:"))
+    app.add_handler(CallbackQueryHandler(handle_help_nav, pattern=r"^help:"))
+    app.add_handler(CallbackQueryHandler(checksub, pattern=r"^checksub$"))

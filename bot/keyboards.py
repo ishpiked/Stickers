@@ -1,0 +1,126 @@
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+try:
+    from bot import state as _state
+except Exception:
+    _state = None
+
+CROP_LABELS = {
+    "left": "Left", "center": "Center", "right": "Right",
+    "top": "Top", "middle": "Middle", "bottom": "Bottom",
+}
+
+EMOJI_LABELS = {
+    "Happy": "😀",
+    "Laugh": "😂",
+    "Love": "😍",
+    "Fire": "🔥",
+    "Skull": "💀",
+    "Party": "🎉",
+}
+QUICK_EMOJIS = list(EMOJI_LABELS.keys())
+
+
+def crop_choice_keyboard(job_id: str, options: list[str]) -> InlineKeyboardMarkup:
+    row = [
+        InlineKeyboardButton(CROP_LABELS[opt], callback_data=f"crop:{job_id}:{opt}")
+        for opt in options
+    ]
+    return InlineKeyboardMarkup([row])
+
+
+def preview_keyboard(job_id: str, allow_redo: bool) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton("Add", callback_data=f"preview:{job_id}:add")]
+    if allow_redo:
+        row.append(InlineKeyboardButton("Redo", callback_data=f"preview:{job_id}:redo"))
+    row.append(InlineKeyboardButton("Cancel", callback_data=f"preview:{job_id}:cancel"))
+    return InlineKeyboardMarkup([row])
+
+
+def emoji_keyboard(job_id: str) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(label, callback_data=f"emoji:{job_id}:{EMOJI_LABELS[label]}") for label in QUICK_EMOJIS]
+    return InlineKeyboardMarkup([row[:3], row[3:], [InlineKeyboardButton("Default", callback_data=f"emoji:{job_id}:default")]])
+
+
+def subscribe_keyboard(channel: str) -> InlineKeyboardMarkup:
+    handle = channel.lstrip("@")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Join Channel", url=f"https://t.me/{handle}")],
+        [InlineKeyboardButton("I have joined", callback_data="checksub")],
+    ])
+
+
+def start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("My Packs", callback_data="start:mypacks"), InlineKeyboardButton("Create", callback_data="start:create")],
+        [InlineKeyboardButton("Stats", callback_data="start:stats"), InlineKeyboardButton("Help", callback_data="help:open")],
+        [InlineKeyboardButton("Settings", callback_data="settings:open")],
+    ])
+
+
+def settings_keyboard(shape: str, bg_removal: bool, auto_add: bool = True) -> InlineKeyboardMarkup:
+    shape_labels = {"square": "Square", "rounded": "Rounded", "circle": "Circle"}
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Shape: {shape_labels.get(shape, 'Square')} (tap to cycle)", callback_data="settings:cycleshape")],
+        [InlineKeyboardButton(f"Remove Background: {'On' if bg_removal else 'Off'}", callback_data="settings:togglebg")],
+        [InlineKeyboardButton(f"Auto Add: {'On' if auto_add else 'Off'} (tap to preview before adding)", callback_data="settings:toggleautoadd")],
+        [InlineKeyboardButton("Back", callback_data="help:back")],
+    ])
+
+
+def help_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Back", callback_data="help:back")]
+    ])
+
+
+def packs_keyboard(packs: list[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for pack in packs:
+        title = None
+        if _state:
+            try:
+                title = _state.get_pack_title(pack)
+            except Exception:
+                title = None
+        if not title:
+            try:
+                title = pack.split("_by_")[0].replace("_", " ")
+            except Exception:
+                title = pack
+        short = title[:30]
+        rows.append([InlineKeyboardButton(short or pack, callback_data=f"pack:view:{pack}")])
+    rows.append([InlineKeyboardButton("Back", callback_data="help:back")])
+    if not packs:
+        rows = [[InlineKeyboardButton("Create", callback_data="start:create")], [InlineKeyboardButton("Back", callback_data="help:back")]]
+    return InlineKeyboardMarkup(rows)
+
+
+def pack_detail_keyboard(pack_name: str, is_hidden: bool) -> InlineKeyboardMarkup:
+    hide_label = "Show" if is_hidden else "Hide"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Rename", callback_data=f"pack:rename:{pack_name}"), InlineKeyboardButton("Set Frame", callback_data=f"pack:frame:{pack_name}")],
+        [InlineKeyboardButton("View Stats", callback_data=f"pack:stat:{pack_name}"), InlineKeyboardButton("Transfer", callback_data=f"pack:transfer:{pack_name}")],
+        [InlineKeyboardButton(hide_label, callback_data=f"pack:hide:{pack_name}"), InlineKeyboardButton("Delete", callback_data=f"pack:delete:{pack_name}")],
+        [InlineKeyboardButton("Back", callback_data="start:mypacks")]
+    ])
+
+
+def duplicate_keyboard(pack_name: str, file_unique_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Add", callback_data=f"dup:add:{pack_name}:{file_unique_id}"), InlineKeyboardButton("Replace", callback_data=f"dup:replace:{pack_name}:{file_unique_id}")],
+        [InlineKeyboardButton("Delete", callback_data=f"dup:delete:{pack_name}:{file_unique_id}"), InlineKeyboardButton("Cancel", callback_data=f"dup:cancel:{pack_name}:{file_unique_id}")]
+    ])
+
+
+def delete_confirm_keyboard(pack_name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Confirm Delete", callback_data=f"pack:delete_confirm:{pack_name}")],
+        [InlineKeyboardButton("Cancel", callback_data=f"pack:view:{pack_name}")]
+    ])
+
+
+def feedback_rating_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("☘︎" * n, callback_data=f"feedback:{n}") for n in range(1, 6)]
+    ])
